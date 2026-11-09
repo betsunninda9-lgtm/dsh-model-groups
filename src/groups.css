@@ -1,0 +1,280 @@
+/* DSH Model Groups: 100% native token-compatible styling */
+
+.dsh-mg-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  flex-shrink: 0;
+  margin: 2px 0 4px;
+  padding: 0 4px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.dsh-mg-summary {
+  flex: 1;
+  min-width: 0;
+  padding: 0 2px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dsh-mg-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.dsh-mg-toolbar button {
+  flex: none;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+
+.dsh-mg-toolbar button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.dsh-mg-toolbar button:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: default;
+}
+
+.dsh-mg-groupStart {
+  display: block;
+  height: 0;
+  pointer-events: none;
+}
+
+.dsh-mg-groupHeading {
+  border-radius: var(--dsw-radius-md);
+  margin: 1px 0;
+}
+
+.dsh-mg-majorHeading {
+  position: static;
+}
+
+.dsh-mg-minorHeading {
+  position: relative;
+}
+
+.dsh-mg-majorContent {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--dsw-alias-border-l1);
+}
+
+.dsh-mg-minorContent {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--dsw-alias-border-l1);
+}
+
+.dsh-mg-source {
+  display: block;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.dsh-mg-triggerSource {
+  color: var(--dsw-alias-label-caption);
+  font-size: 13px;
+}
+
+.dsh-mg-groupHeading button {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s;
+}
+
+.dsh-mg-groupHeading button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.dsh-mg-groupHeading button:disabled {
+  cursor: default;
+}
+
+.dsh-mg-groupHeading button:focus-visible,
+.dsh-mg-toolbar button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+}
+
+.dsh-mg-groupArrow {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--dsw-alias-label-caption);
+  transition: transform .12s;
+}
+
+.dsh-mg-groupArrowOpen {
+  transform: rotate(90deg);
+}
+
+.dsh-mg-groupName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-mg-groupCount {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+.dsh-mg-currentBadge {
+  flex: none;
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.dsh-mg-groups {
+  min-height: 0;
+}
+
+.dsh-mg-groups [hidden] {
+  display: none !important;
+}
+
+/* ── 飞出卡片：与官方原版菜单 100% 结构一致，剔除 header 伪分层与白色叠加 ── */
+.dsh-mg-flyout-subgroup-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.dsh-mg-subgroup-item {
+  box-sizing: border-box;
+  border-radius: var(--dsw-radius-md);
+  width: auto;
+  min-width: 100%;
+  min-height: 34px;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+  background: 0 0;
+  border: none;
+  outline: none;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  display: flex;
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  transition: background .12s;
+}
+
+.dsh-mg-subgroup-item:hover,
+.dsh-mg-subgroup-item[data-active="true"] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.dsh-mg-subgroup-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-mg-subgroup-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.dsh-mg-subgroup-arrow {
+  flex: none;
+  color: var(--dsw-alias-menu-icon, var(--dsw-alias-label-caption));
+}
+
+.dsh-mg-active-heading {
+  background: var(--dsw-alias-interactive-bg-hover) !important;
+}
+
+/* ── 底部模式切换：原生轻量化，无突兀高饱和蓝块 ── */
+.dsh-mg-modebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 2px;
+  margin-top: 3px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.dsh-mg-mode-btn {
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: var(--dsw-radius-sm);
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+
+.dsh-mg-mode-btn:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.dsh-mg-mode-btn[data-active="true"] {
+  background: var(--dsw-alias-interactive-bg-active, rgba(255, 255, 255, 0.1));
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+@media (pointer: coarse) {
+  .dsh-mg-groupHeading button { min-height: 36px; }
+  .dsh-mg-toolbar button { height: 26px; }
+  .dsh-mg-mode-btn { min-height: 24px; padding: 2px 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dsh-mg-groupArrow { transition: none; }
+}
+

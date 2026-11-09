@@ -1,0 +1,17 @@
+{
+  "version": "0.2.2-rc.1",
+  "packageName": "@deepseek-ai/dsh-llm",
+  "target": "node_modules/@deepseek-ai/dsh-llm/lib/typert.remote-client.js",
+  "baseSha256": "fea6401fe00567f6f25bd58057e30167bb38a7c09f00dcd626116e1bc6c1fde6",
+  "resultSha256": "b90bef9f8309491c5c84d193456bce8dd2e9672936a26f1adda51a6cc34e3f0c",
+  "replacements": [
+    {
+      "before": "  'apiKey': z.string().optional().describe('Credential for this interrogation alone; the harness never stores it.'),",
+      "after": "  'apiKey': z.string().optional().describe('Credential for this interrogation alone; the harness never stores it.'),\n  'keyEntryId': z.string().optional().describe('Exact stored key entry to interrogate; never falls back to another entry credential.'),"
+    },
+    {
+      "before": "\"apiKey\":{\"type\":\"string\",\"description\":\"Credential for this interrogation alone; the harness never stores it.\"}",
+      "after": "\"apiKey\":{\"type\":\"string\",\"description\":\"Credential for this interrogation alone; the harness never stores it.\"},\"keyEntryId\":{\"type\":\"string\",\"description\":\"Exact stored key entry to interrogate; never falls back to another entry credential.\"}"
+    }
+  ]
+}

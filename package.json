@@ -1,0 +1,66 @@
+{
+  "name": "dsh-model-groups",
+  "version": "0.3.2",
+  "description": "同一供应商的多密钥配置与供应商→密钥配置→模型折叠选择，手动精确路由（0.2.2-rc.1 移植版）。",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/betsunninda9-lgtm/dsh-model-groups.git"
+  },
+  "homepage": "https://github.com/betsunninda9-lgtm/dsh-model-groups#readme",
+  "bugs": {
+    "url": "https://github.com/betsunninda9-lgtm/dsh-model-groups/issues"
+  },
+  "keywords": ["dsh", "deepseek-harness", "models", "multi-key", "model-picker"],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "lib",
+    "native/*.patch.json",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22",
+    "dsh": "0.2.2-rc.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-settings-models"
+      ],
+      "external": [
+        "react",
+        "react-dom",
+        "react/jsx-runtime",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check:build": "node scripts/build.mjs --check",
+    "test": "node --test test/*.test.mjs",
+    "test:ui": "node --test test/picker-ui.test.mjs",
+    "native:check": "node scripts/native-patches.mjs --check",
+    "prepack": "npm run build && npm run check:build"
+  }
+}

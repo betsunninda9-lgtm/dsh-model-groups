@@ -1,0 +1,8 @@
+node_modules/
+*.tgz
+native/backups/
+*.log
+.env
+.env.*
+.npmrc
+.DS_Store
