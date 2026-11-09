@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-groups",
-  "version": "0.3.4-beta.3",
-  "description": "DSH 网页模型选择器：供应商与密钥配置分层折叠、多密钥手动选择。支持 DSH 0.2.2-rc.1。",
+  "version": "0.4.0-beta.1",
+  "description": "Host-patch-free DSH model groups with independent named credentials and precise model routing.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -12,22 +12,21 @@
   "bugs": {
     "url": "https://github.com/betsunninda9-lgtm/dsh-model-groups/issues"
   },
-  "keywords": ["dsh", "deepseek-harness", "models", "multi-key", "model-picker"],
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
     "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "files": [
-    "src",
-    "lib",
-    "native/*.patch.json",
-    "scripts",
+    "src/index.js",
+    "src/remote.js",
+    "src/host",
+    "lib/client.js",
+    "locale",
+    "icon.svg",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -44,24 +43,51 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-ui-model-selection",
-        "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-settings-models"
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes"
       ],
       "external": [
         "react",
         "react-dom",
-        "react/jsx-runtime",
-        "@deepseek-ai/dsh-client-ui-primitives"
+        "react/jsx-runtime"
       ]
     }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "~3.19.0"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.5.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis-plugin-loader": "~1.1.0",
+    "@deepseek-ai/dsh-api-gateway": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-app-boot": "^0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-locale": "^0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-config-editor": "^0.2.2-rc.1",
+    "@deepseek-ai/dsh-plugin-manager": "^0.2.2-rc.1",
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-typert-loader": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-typert-registry": "0.2.2-rc.1",
+    "esbuild": "^0.27.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
     "check:build": "node scripts/build.mjs --check",
-    "test": "node --test test/*.test.mjs",
-    "test:ui": "node --test test/picker-ui.test.mjs",
-    "native:check": "node scripts/native-patches.mjs --check",
-    "doctor": "node scripts/doctor.mjs",
+    "test": "node --test test/host*.test.mjs test/ui-hostless*.test.mjs test/remote*.test.mjs",
     "prepack": "npm run build && npm run check:build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

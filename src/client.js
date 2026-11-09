@@ -1,33 +1,17 @@
-const groupPreferences = createGroupPreferences();
-const EMPTY_PROVIDERS_SNAPSHOT = Object.freeze({ status: 'unavailable', value: {} });
-
-const inject = ['slots', 'modelDirectories', 'sessions', 'locale', 'remote', 'remote.session', 'remote.llm', 'configForms'];
-export function apply(ctx) {
-  installModelSelectStyles();
-  installModelGroupsStyles();
-  const providersForm = ctx.configForms?.get('llm-pi-ai');
-  const onStorage = event => {
-    if (event.key === STORAGE_KEY || event.key === null) groupPreferences.sync(event.key === null ? null : event.newValue);
+import { apply as mountUI, inject as uiInject } from './ui/index.js';
+import { REMOTE } from './remote.js';
+export const inject = [...uiInject, 'remote'];
+export async function apply(ctx) {
+  const unmountRemote = await ctx.remote.$mount(REMOTE);
+  ctx.on('dispose', unmountRemote);
+  const call = async (method, ...args) => {
+    const result = await ctx.remote.modelGroups[method](...args);
+    if (result?.ok === false) throw new Error(result.error?.message || 'Model groups operation failed');
+    return result?.ok === true ? result.value : result;
   };
-  window.addEventListener('storage', onStorage);
-  ctx.on('dispose', () => {
-    window.removeEventListener('storage', event => onStorage(event));
-    document.querySelectorAll('style[data-plugin="dsh-model-groups"]').forEach(style => style.remove());
-  });
-  return ctx.slots.inject('conversation.input.model', () => ctx.slots.register({
-    name: 'conversation.input.model',
-    priority: -10,
-    locale: 'model',
-    inject(sessionId) {
-      const directory = ctx.modelDirectories.directoryFor(sessionId);
-      const available = ctx.sessions.subagentAddress(sessionId) === undefined;
-      return {
-        available,
-        directory: directory.store,
-        providersForm,
-        load() { if (available) directory.load().catch(() => {}); },
-        select: selection => available ? directory.select(selection) : Promise.resolve(undefined),
-      };
-    },
-  }, ModelSeatBoundary));
+  mountUI(ctx, {operations:{
+    writeSecret:({entryId,secret})=>call('setCredential',entryId,secret),
+    deleteSecret:({entryId})=>call('deleteCredential',entryId),
+    credentialStatus:async({entryId})=>Boolean((await call('snapshot')).credentials[entryId]?.configured),
+  }});
 }

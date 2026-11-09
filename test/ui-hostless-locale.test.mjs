@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
+import { dictionaries, phraseTranslator } from '../src/ui/locale.js';
+const require=createRequire(import.meta.url);
+test('official LocaleRuntime resolves plugin dictionaries and follows language changes',async()=>{
+ let api;
+ const source=await fs.readFile(require.resolve('@deepseek-ai/dsh-client-locale/client'),'utf8');
+ vm.runInNewContext(source,{window:{__ModuleLoader__:{load:({factory})=>{api=factory(name=>name.startsWith('react')?require(name):{});}}},console,navigator:{languages:['zh-CN']}});
+ const runtime=new api.LocaleRuntime({emit:()=>{},effect:fn=>fn()},undefined,{languages:['zh-CN'],preference:'zh'});
+ const dispose=runtime.register('model-groups',dictionaries);
+ const t=phraseTranslator(runtime.bind('model-groups'));
+ assert.equal(t('Model groups'),'模型分组');
+ assert.equal(t('Save failed. Your draft is retained. Retry or reload the latest configuration.'),'保存失败，草稿已保留。请重试或重新加载最新配置。');
+ await runtime.setLocale('en'); assert.equal(t('Model groups'),'Model groups');
+ assert.equal(runtime.resolveText('Close'),'Close');
+ dispose();
+});

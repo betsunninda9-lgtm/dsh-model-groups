@@ -1,0 +1,66 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Context } from '@deepseek-ai/cordis';
+import Loader from '@deepseek-ai/cordis-plugin-loader';
+import LlmRuntime from '@deepseek-ai/dsh-llm';
+import Settings from '@deepseek-ai/dsh-settings';
+import ConfigEditor from '@deepseek-ai/dsh-config-editor';
+import Typert from '@deepseek-ai/dsh-typert-registry';
+import { mountRootInclude, readProfilePatches } from '@deepseek-ai/dsh-app-boot';
+import { credentialKey } from '@deepseek-ai/dsh-credentials';
+
+const root = fileURLToPath(new URL('../',import.meta.url));
+test('ordinary plugin persists isolated profile Config through official Loader and ConfigEditor', async t => {
+  const dir = await mkdtemp(join(tmpdir(),'synthetic-model-groups-'));
+  assert.ok(dir.startsWith(join(tmpdir(),'synthetic-model-groups-')));
+  t.after(() => rm(dir,{recursive:true,force:true}));
+  const home = join(dir,'synthetic-home'); await mkdir(home);
+  const manifest = join(dir,'package.json'), patchPath = join(dir,'cordis.patch.yml'), base = join(dir,'base.yml');
+  await writeFile(manifest,JSON.stringify({name:'synthetic-profile',private:true,dsh:{profile:{bundles:[]}}}));
+  await writeFile(base,'[]\n');
+  await writeFile(patchPath,JSON.stringify([{insert:[{id:'model-groups',name:new URL('../src/index.js',import.meta.url).href,config:{}}]}]));
+  const profile = {name:'synthetic',dir,patchPath,installAnchor:join(root,'package.json'),cwd:dir,home,startedBundles:[],overlays:[],telemetryDisabledEnv:undefined};
+  const records = new Map();
+  async function boot() {
+    const ctx = new Context();
+    const errors = []; ctx.on('internal/error', error => { errors.push(String(error?.stack ?? error)); });
+    ctx.provide('profileContext',profile);
+    ctx.provide('credentials',{readRecord:async key=>records.get(key),describeRecord:async key=>({configured:records.has(key),kind:records.get(key)?.kind,writable:true}),modifyRecord:async(key,mutate)=>{const record=await mutate(records.get(key));if(record)records.set(key,record);return record;},deleteRecord:async key=>{records.delete(key);}});
+    for (const plugin of [Loader,LlmRuntime,Typert,ConfigEditor,Settings]) { const fiber = ctx.plugin(plugin); await fiber.await(); assert.equal(fiber.state,2,plugin.name); }
+    await mountRootInclude(ctx,base,readProfilePatches('synthetic',profile),new URL('../',import.meta.url).href);
+    await ctx.loader.await();
+    const entry = [...ctx.loader.entries()].find(item=>item.options.id==='model-groups');
+    assert.ok(entry); await entry.fiber?.await(); assert.equal(entry.fiber?.state,2,errors.join('\n'));
+    return {ctx,entry,dispose:()=>ctx.fiber.dispose()};
+  }
+  let running = await boot(); t.after(()=>running.dispose());
+  let {ctx,entry} = running;
+  assert.equal(ctx.settings.describe().find(item=>item.ns==='model-groups')?.autoGenerate,false);
+  const fiber = entry.fiber;
+  let state = await ctx.modelGroups.snapshot();
+  state = await ctx.modelGroups.createGroup({name:'Synthetic Supplier',baseURL:'https://synthetic.invalid/v1',api:'openai-completions'},state.revision).catch(error=>{error.message='createGroup: '+error.message;throw error;});
+  const groupId = state.groupId;
+  state = await ctx.modelGroups.createEntry(groupId,{name:'Synthetic Entry',models:['synthetic-model']},state.revision);
+  const route = state.route;
+  assert.equal(entry.fiber,fiber,'volatile changes must not remount plugin');
+  assert.equal(ctx.llm.listProviders()[0].id,route);
+  await ctx.modelGroups.setCredential(route,'synthetic-secret-value');
+  assert.equal(records.get(credentialKey('model-groups',route)).key,'synthetic-secret-value');
+  const persisted = await readFile(patchPath,'utf8');
+  assert.ok(persisted.includes(route)); assert.ok(!persisted.includes('synthetic-secret-value'));
+  await assert.rejects(ctx.settings.mutate('model-groups',[{op:'unset',path:['groups',groupId,'entries',route]}],state.revision),/tombstone/i);
+  assert.equal(await readFile(patchPath,'utf8'),persisted);
+  state = await ctx.modelGroups.snapshot();
+  state = await ctx.modelGroups.deleteEntry(groupId,route,state.revision);
+  assert.equal(state.tombstones[route],true); assert.equal(ctx.llm.listProviders().length,0);
+  await running.dispose();
+  running = await boot(); ctx = running.ctx;
+  state = await ctx.modelGroups.snapshot();
+  assert.equal(state.tombstones[route],true); assert.ok(state.groups[groupId]);
+  await assert.rejects(ctx.settings.mutate('model-groups',[{op:'unset',path:['tombstones',route]}],state.revision),/Tombstones/);
+  assert.equal(ctx.llm.listProviders().length,0);
+});
