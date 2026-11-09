@@ -125,6 +125,25 @@ test('a concurrent later edit survives while earlier replacements are rolled bac
   assert.ok(f.files.slice(2).every(item => fs.readFileSync(item.file, 'utf8') === item.source));
 });
 
+test('explicit hash variants apply and revert without accepting unknown content', t => {
+  const f = fixture(t), entry = f.files[0];
+  const source = 'official-base-variant';
+  const result = 'official-patched-variant';
+  const artifact = { ...entry.artifact, replacements: [{ before: 'base', after: 'patched' }], variants: [{ baseSha256: sha256(source), resultSha256: sha256(result) }] };
+  fs.writeFileSync(path.join(f.artifacts, entry.name), JSON.stringify(artifact));
+  fs.writeFileSync(entry.file, source);
+  const plans = planPatches(f.root, 'apply', f.artifacts);
+  assert.equal(plans[0].artifact.baseSha256, sha256(source));
+  const backups = path.join(f.root, 'variant-backups');
+  applyPlan(plans, backups);
+  assert.equal(fs.readFileSync(entry.file, 'utf8'), result);
+  assert.equal(planPatches(f.root, 'check', f.artifacts)[0].state, 'patched');
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), backups);
+  assert.equal(fs.readFileSync(entry.file, 'utf8'), source);
+  fs.writeFileSync(entry.file, source + '-unknown');
+  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /unrecognized content/);
+});
+
 test('shipped artifacts are reversible against installed targets or skip when no DSH_ROOT', (t) => {
   const dshRoot = process.env.DSH_ROOT;
   if (!dshRoot) {
@@ -132,11 +151,13 @@ test('shipped artifacts are reversible against installed targets or skip when no
     return;
   }
   for (const name of ARTIFACTS) {
-    const artifact = JSON.parse(fs.readFileSync(new URL(`../native/${name}`, import.meta.url), 'utf8'));
+    let artifact = JSON.parse(fs.readFileSync(new URL(`../native/${name}`, import.meta.url), 'utf8'));
     const targetFile = path.resolve(dshRoot, artifact.target);
     assert.ok(fs.existsSync(targetFile), `Target file does not exist: ${targetFile}`);
     const source = fs.readFileSync(targetFile, 'utf8');
     const hash = sha256(source);
+    const variant = artifact.variants?.find(item => hash === item.baseSha256 || hash === item.resultSha256);
+    if (variant) artifact = { ...artifact, ...variant };
     if (hash === artifact.resultSha256) {
       // Installed target is already patched; test reverting it back to base
       const pristine = transformSource(source, artifact, true);

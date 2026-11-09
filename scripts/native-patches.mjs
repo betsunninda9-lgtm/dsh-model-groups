@@ -32,7 +32,7 @@ export function planPatches(dshRoot, mode = 'check', artifactDirectory = path.jo
   if (dsh.name !== '@deepseek-ai/dsh' || dsh.version !== '0.2.2-rc.1') throw new Error('This patch supports only @deepseek-ai/dsh 0.2.2-rc.1');
   const seen = new Set();
   return ARTIFACTS.map(name => {
-    const artifact = JSON.parse(fs.readFileSync(path.join(artifactDirectory, name), 'utf8'));
+    let artifact = JSON.parse(fs.readFileSync(path.join(artifactDirectory, name), 'utf8'));
     if (artifact.version !== '0.2.2-rc.1' || !/^@deepseek-ai\/dsh-[a-z-]+$/.test(artifact.packageName)) throw new Error('Unsupported patch package/version');
     if (!Array.isArray(artifact.replacements) || artifact.replacements.length === 0 || !/^[0-9a-f]{64}$/.test(artifact.baseSha256) || !/^[0-9a-f]{64}$/.test(artifact.resultSha256)) throw new Error('Invalid patch manifest');
     const prefix = `node_modules/${artifact.packageName}/`;
@@ -44,6 +44,13 @@ export function planPatches(dshRoot, mode = 'check', artifactDirectory = path.jo
     if (pkg.name !== artifact.packageName || pkg.version !== artifact.version) throw new Error('Installed native package version mismatch');
     const source = fs.readFileSync(file, 'utf8');
     const hash = sha256(source);
+    if (artifact.variants !== undefined) {
+      if (!Array.isArray(artifact.variants) || artifact.variants.some(variant => !/^[0-9a-f]{64}$/.test(variant.baseSha256) || !/^[0-9a-f]{64}$/.test(variant.resultSha256))) throw new Error('Invalid patch variants');
+      const candidates = [artifact, ...artifact.variants];
+      const matched = candidates.filter(variant => hash === variant.baseSha256 || hash === variant.resultSha256);
+      if (matched.length > 1) throw new Error('Ambiguous patch variant');
+      if (matched.length === 1) artifact = { ...artifact, baseSha256: matched[0].baseSha256, resultSha256: matched[0].resultSha256 };
+    }
     const state = hash === artifact.baseSha256 ? 'pristine' : hash === artifact.resultSha256 ? 'patched' : 'modified';
     if (state === 'modified') throw new Error(`Refusing unrecognized content: ${artifact.target}`);
     // A no-op still verifies both directions to detect a broken manifest.
