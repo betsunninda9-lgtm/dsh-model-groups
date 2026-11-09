@@ -6,6 +6,11 @@
   "resultSha256": "a2b3bcda38015026ed58074cef0d508bbd2d7cb1423c00331651fcbd1a9f6b55",
   "variants": [
     {
+      "source": "0.2.2-rc.1 with tool lookup optimization and credential cancellation",
+      "baseSha256": "0a99a2fc903a4285044b09114b3bd20ee1e612f39aa381e4a71b10d48ee9e9f7",
+      "resultSha256": "c87f965d9fcc5bbcd386e98ea3b292b05ec7a55d80df1266e18234031b80990e"
+    },
+    {
       "source": "npm official 0.2.2-rc.1",
       "baseSha256": "1a3ae58f9b4493e15459cc5000ec80f21b5d3f4a9dea6ffb6bc28e5b8817ae8a",
       "resultSha256": "b9416207cc7c27aff40cb2b877c9176e53809eb2f6dc741828c2ed6f6bdf541b"

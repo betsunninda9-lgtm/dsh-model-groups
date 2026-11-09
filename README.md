@@ -9,11 +9,36 @@
 
 ## 当前测试版
 
-`0.3.4-beta.2` 修复侧边面板在窄屏下覆盖父面板的问题，并增加只读安装诊断。它尚未经过真实手机网页的视觉与触摸验收；窄屏三级并列时每列会变窄，长名称可能截断。
+`0.3.4-beta.3` 修复侧边面板在窄屏下覆盖父面板的问题，并增加只读安装诊断。它尚未经过真实手机网页的视觉与触摸验收；窄屏三级并列时每列会变窄，长名称可能截断。
 
-该测试版额外支持 npm 官方 `0.2.2-rc.1` 的 pi-ai 文件，以及原先已验证的本机发行文件。两种文件均按完整 SHA-256 校验并各自恢复原始版本；其他未知修改仍会被拒绝。安装器识别文件并不等于完成安装，仍须显式应用补丁、重启原服务并刷新网页。
+该测试版额外支持 npm 官方 `0.2.2-rc.1` 的 pi-ai 文件，以及原先已验证的本机发行文件。还支持保留工具查找优化与凭据取消检查的已验证发行文件。三种文件均按完整 SHA-256 校验并各自恢复原始版本；其他未知修改仍会被拒绝。安装器识别文件并不等于完成安装，仍须显式应用补丁、重启原服务并刷新网页。
 
-可从 GitHub 的对应预发布版本下载安装包，再按下文流程注册。下面手动安装示例仍固定在稳定版 `0.3.3`，测试版请使用发布页的准确版本与文件名。
+### 测试版统一安装入口
+
+使用支持的 Bash 终端下载并解压测试包：
+
+```bash
+PLUGIN_DIR="${DSH_HOME:-$HOME/.dsh}/local-plugins/dsh-model-groups-0.3.4-beta.3"
+mkdir -p "$PLUGIN_DIR"
+cd "$PLUGIN_DIR"
+curl --fail --location --output plugin.tgz https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.4-beta.3/dsh-model-groups-0.3.4-beta.3.tgz
+tar -xzf plugin.tgz --strip-components=1
+node scripts/setup.mjs --dsh-root /opt/dsh --profile web
+```
+
+上面最后一条是只读兼容检查。`/opt/dsh` 与 `web` 是 dsh-go 本机常见值，其他主机须替换为实际目录与 profile。
+
+保存草稿、停止原引擎后，在**独立于该引擎的外部终端**回到相同插件目录执行：
+
+```bash
+node scripts/setup.mjs --dsh-root /opt/dsh --profile web --apply --service-stopped
+```
+
+这一条命令会先检查全部目标，再注册插件、应用补丁并复查。`--service-stopped` 表示操作者已经停止服务，脚本不会代为停止或检测服务。注册成功后若补丁失败，插件可能已注册，应先检查错误；不要把注册状态当成完整安装成功。完成后启动原引擎并刷新网页。脚本不会改供应商配置或读取密钥。
+
+**给 AI 的测试版任务：下载本节的准确 GitHub 测试包，先运行 setup 兼容检查；通过后安排外部终端停机执行 setup --apply --service-stopped，再启动原引擎并验收。不要退回 npm 稳定版 0.3.3，也不要只注册插件。**
+
+下面的逐步手动安装示例仍固定在稳定版 `0.3.3`，适合已符合该稳定版哈希的环境。
 
 ## 适用范围
 
