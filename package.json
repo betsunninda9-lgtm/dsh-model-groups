@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-groups",
-  "version": "0.3.2",
-  "description": "同一供应商的多密钥配置与供应商→密钥配置→模型折叠选择，手动精确路由（0.2.2-rc.1 移植版）。",
+  "version": "0.3.3",
+  "description": "DSH 网页模型选择器：供应商与密钥配置分层折叠、多密钥手动选择。支持 DSH 0.2.2-rc.1。",
   "type": "module",
   "license": "MIT",
   "repository": {
