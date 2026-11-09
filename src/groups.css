@@ -278,3 +278,23 @@
   .dsh-mg-groupArrow { transition: none; }
 }
 
+
+/* Cascade columns share the viewport rather than covering their ancestors. */
+.dsh-mg-cascade-panel {
+  box-sizing: border-box;
+  min-width: 0;
+}
+.dsh-mg-cascade-panel button,
+.dsh-mg-cascade-panel [role="menu"],
+.dsh-mg-cascade-panel .dsh-mg-modebar,
+.dsh-mg-cascade-panel .dsh-mg-toolbar {
+  min-width: 0;
+}
+.dsh-mg-cascade-panel .dsh-mg-toolbar,
+.dsh-mg-cascade-panel .dsh-mg-modebar,
+.dsh-mg-cascade-panel .dsh-mg-toolbar-actions {
+  flex-wrap: wrap;
+}
+.dsh-mg-cascade-panel .dsh-mg-summary {
+  white-space: normal;
+}

@@ -92,7 +92,15 @@ export function createDOM() {
       this.props.onFocus?.({ target: this, relatedTarget: previous });
     }
     click() { if (!this.disabled) this.props.onClick?.({ target: this, currentTarget: this, preventDefault() {} }); }
-    getBoundingClientRect() { return { left: 100, right: 400, top: 600, bottom: 628, width: 300, height: 28 }; }
+    getBoundingClientRect() {
+      const style = this.props.style;
+      if (typeof style?.left === 'number' && style.visibility !== 'hidden') {
+        const width = style.width ?? this.offsetWidth;
+        const height = style.height ?? this.offsetHeight;
+        return { left: style.left, right: style.left + width, top: style.top, bottom: style.top + height, width, height };
+      }
+      return { left: 100, right: 400, top: 600, bottom: 628, width: 300, height: 28 };
+    }
     scrollIntoView() { /* No layout is claimed by this harness. */ }
   }
   class HTMLButtonElement extends Element { constructor() { super('button'); } }
@@ -388,6 +396,8 @@ export function createPickerHarness({ snapshot, providers = {}, providersStatus 
     text: () => document.body.textContent,
     focus(node) { node.focus(); flush(); },
     click(node) { assert.ok(visible(node), 'cannot click a hidden control'); node.click(); flush(); },
+    mouse(node, event) { node.props[event]?.({ target: node, currentTarget: node }); flush(); },
+    resize(width, height = window.innerHeight) { window.innerWidth = width; window.innerHeight = height; window.dispatch('resize', {}); flush(); },
     search(value) {
       const input = one('[role="searchbox"]');
       assert.equal(input.props.readOnly, false, 'search must not be read-only');

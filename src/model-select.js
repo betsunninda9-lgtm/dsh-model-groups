@@ -111,6 +111,29 @@ const MEASURE_STYLE = {
 * store/verbs) + the standard locale seat.
 * @returns the trigger and, while open, the two-level menu.
 */
+// Lay out the entire cascade together: positioning a child alone can put it
+// over an ancestor when neither side has room for another full-size card.
+function layoutModelFlyouts(rect, viewportWidth, viewportHeight, count) {
+ const margin = Math.min(12, Math.max(0, viewportWidth / 8));
+ const available = Math.max(1, viewportWidth - margin * 2);
+ const preferredWidth = rect.width > 0 ? rect.width : 280;
+ const width = Math.min(preferredWidth, available / count);
+ const height = Math.min(rect.height > 0 ? rect.height : 360, Math.max(1, viewportHeight - margin * 2));
+ const leftRoom = rect.left - margin;
+ const rightRoom = viewportWidth - margin - (rect.left + preferredWidth);
+ const direction = leftRoom >= width * (count - 1) ? -1
+  : rightRoom >= width * (count - 1) ? 1 : leftRoom >= rightRoom ? -1 : 1;
+ const desiredLeft = direction < 0 ? rect.left - width * (count - 1) : rect.left;
+ const start = Math.max(margin, Math.min(desiredLeft, viewportWidth - margin - width * count));
+ const top = Math.max(margin, Math.min(rect.top, viewportHeight - margin - height));
+ return Array.from({ length: count }, (_, index) => ({
+  left: start + width * (direction < 0 ? count - 1 - index : index),
+  top, width, height,
+  // Override the native menu's intrinsic minimum and maximum at narrow widths.
+  minWidth: 0, maxWidth: width, maxHeight: height,
+ }));
+}
+
 function ModelSelect({ locked, available, directory, load, select, t, renderSlot, providersForm }) {
 	const preferences = react.useSyncExternalStore(groupPreferences.subscribe, groupPreferences.getSnapshot);
 	const configuration = react.useSyncExternalStore(listener => providersForm?.subscribe(listener) ?? (() => {}), () => providersForm?.getSnapshot() ?? EMPTY_PROVIDERS_SNAPSHOT);
@@ -149,75 +172,18 @@ function ModelSelect({ locked, available, directory, load, select, t, renderSlot
 		}
 	};
 
-	// 完全读取并匹配官方原版主卡片尺寸（宽、高严格保持与主卡片完全一致）
 	const triggerFlyout = (entry, anchorEl) => {
 		clearFlyoutTimer();
 		if (activeFlyout?.key === entry.key) return;
 		setActiveSubFlyout(null);
-		const menuEl = menuRef.current;
-		const menuRect = menuEl ? menuEl.getBoundingClientRect() : anchorEl.getBoundingClientRect();
-		const margin = 12;
-		const winW = window.innerWidth;
-		const winH = window.innerHeight;
-		// 直接读取官方主卡片的实际渲染宽度与高度
-		const panelW = menuRect.width > 0 ? menuRect.width : 280;
-		const panelH = menuRect.height > 0 ? menuRect.height : 360;
-
-		// 紧靠主卡片左侧，0px 缝隙严丝合缝
-		let left = menuRect.left - panelW;
-		if (left < margin) {
-			if (winW - menuRect.right >= panelW + margin) {
-				left = menuRect.right;
-			} else {
-				left = Math.max(margin, Math.min(menuRect.left, winW - panelW - margin));
-			}
-		}
-
-		// 顶部与官方主卡片绝对平齐，高度与官方主卡片 1:1 等高
-		let top = menuRect.top;
-		setActiveFlyout({
-			key: entry.key,
-			entry,
-			pos: {
-				left: Math.round(left),
-				top: Math.round(top),
-				width: Math.round(panelW),
-				height: Math.round(panelH)
-			}
-		});
+		const rect = activeFlyout?.anchorRect ?? (menuRef.current ?? anchorEl).getBoundingClientRect();
+		setActiveFlyout({ key: entry.key, entry, anchorRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } });
 	};
 
-	const triggerSubFlyout = (childGroup, anchorEl) => {
+	const triggerSubFlyout = (childGroup) => {
 		clearFlyoutTimer();
 		if (activeSubFlyout?.key === childGroup.key) return;
-		const flyoutEl = flyoutRef.current;
-		const flyoutRect = flyoutEl ? flyoutEl.getBoundingClientRect() : anchorEl.getBoundingClientRect();
-		const margin = 12;
-		const winW = window.innerWidth;
-		const winH = window.innerHeight;
-		const panelW = flyoutRect.width > 0 ? flyoutRect.width : 280;
-		const panelH = flyoutRect.height > 0 ? flyoutRect.height : 360;
-
-		let left = flyoutRect.left - panelW;
-		if (left < margin) {
-			if (winW - flyoutRect.right >= panelW + margin) {
-				left = flyoutRect.right;
-			} else {
-				left = Math.max(margin, Math.min(flyoutRect.left, winW - panelW - margin));
-			}
-		}
-
-		let top = flyoutRect.top;
-		setActiveSubFlyout({
-			key: childGroup.key,
-			childGroup,
-			pos: {
-				left: Math.round(left),
-				top: Math.round(top),
-				width: Math.round(panelW),
-				height: Math.round(panelH)
-			}
-		});
+		setActiveSubFlyout({ key: childGroup.key, childGroup });
 	};
 
 	const scheduleCloseFlyout = (delay = 240) => {
@@ -229,11 +195,14 @@ function ModelSelect({ locked, available, directory, load, select, t, renderSlot
 	};
 
 	const scheduleCloseSubFlyout = (delay = 240) => {
-		if (subFlyoutTimerRef.current !== null) clearTimeout(subFlyoutTimerRef.current);
+		// Leaving the key panel must not let an older parent-leave timer
+		// destroy both the provider and key panels.
+		clearFlyoutTimer();
 		subFlyoutTimerRef.current = setTimeout(() => {
 			setActiveSubFlyout(null);
 		}, delay);
 	};
+	(0, react.useEffect)(() => () => clearFlyoutTimer(), []);
 	const [toast, setToast] = (0, react.useState)(null);
 	const toastSeq = (0, react.useRef)(0);
 	const rootRef = (0, react.useRef)(null);
@@ -407,6 +376,9 @@ function ModelSelect({ locked, available, directory, load, select, t, renderSlot
 		state,
 		query
 	]);
+	const cascade = open && pane === "model" && menuMode === "panel" && !searching && activeFlyout
+		? layoutModelFlyouts({ ...activeFlyout.anchorRect, ...(menuPos ?? {}) }, window.innerWidth, window.innerHeight, activeSubFlyout ? 3 : 2)
+		: null;
 	if (!available) return null;
 	const show = () => {
 		setSelectionFocus(false);
@@ -670,7 +642,7 @@ function ModelSelect({ locked, available, directory, load, select, t, renderSlot
 						title: searching ? text('搜索时自动展开，清空搜索后恢复', 'Expanded during search; clearing restores your groups') : entry.id || entry.name,
 						onClick: (e) => {
 							if (isFlyoutMode) {
-								if (isFlyoutActive) setActiveFlyout(null);
+								if (isFlyoutActive) { clearFlyoutTimer(); setActiveFlyout(null); setActiveSubFlyout(null); }
 								else triggerFlyout(entry, e.currentTarget);
 							} else {
 								setHighlightedIndex(null);
@@ -753,8 +725,9 @@ function ModelSelect({ locked, available, directory, load, select, t, renderSlot
 			open && (0, react_dom.createPortal)((0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.MenuSurface, {
 				ref: menuRef,
 				id: `${id}-menu`,
-				className: ModelSelect_module_css_default.menu,
-				style: menuPos ?? MEASURE_STYLE,
+				className: clsx(ModelSelect_module_css_default.menu, cascade && "dsh-mg-cascade-panel"),
+				"data-flyout-level": cascade ? "0" : undefined,
+				style: cascade?.[0] ?? menuPos ?? MEASURE_STYLE,
 				role: pane === "model" ? "group" : "menu",
 				"aria-label": t("menu.aria"),
 				"aria-busy": state.status === "loading" || busy,
@@ -943,18 +916,12 @@ function ModelSelect({ locked, available, directory, load, select, t, renderSlot
 					}, level.key))] })
 				]
 			}), document.body),
-			open && pane === "model" && menuMode === "panel" && activeFlyout !== null && (0, react_dom.createPortal)(
+			cascade !== null && activeFlyout !== null && (0, react_dom.createPortal)(
 				react_jsx_runtime.jsx(_deepseek_ai_dsh_client_ui_primitives.MenuSurface, {
 					ref: flyoutRef,
-					className: ModelSelect_module_css_default.menu,
-					style: {
-						left: activeFlyout.pos.left,
-						top: activeFlyout.pos.top,
-						width: activeFlyout.pos.width,
-						height: activeFlyout.pos.height,
-						position: "fixed",
-						margin: 0
-					},
+					className: clsx(ModelSelect_module_css_default.menu, "dsh-mg-cascade-panel"),
+					"data-flyout-level": "1",
+					style: { ...cascade[1], position: "fixed", margin: 0 },
 					onMouseEnter: clearFlyoutTimer,
 					onMouseLeave: () => scheduleCloseFlyout(200),
 					onMouseDown: (e) => {
@@ -993,18 +960,12 @@ function ModelSelect({ locked, available, directory, load, select, t, renderSlot
 				}),
 				document.body
 			),
-			open && pane === "model" && menuMode === "panel" && activeSubFlyout !== null && (0, react_dom.createPortal)(
+			cascade !== null && activeSubFlyout !== null && (0, react_dom.createPortal)(
 				react_jsx_runtime.jsx(_deepseek_ai_dsh_client_ui_primitives.MenuSurface, {
 					ref: subFlyoutRef,
-					className: ModelSelect_module_css_default.menu,
-					style: {
-						left: activeSubFlyout.pos.left,
-						top: activeSubFlyout.pos.top,
-						width: activeSubFlyout.pos.width,
-						height: activeSubFlyout.pos.height,
-						position: "fixed",
-						margin: 0
-					},
+					className: clsx(ModelSelect_module_css_default.menu, "dsh-mg-cascade-panel"),
+					"data-flyout-level": "2",
+					style: { ...cascade[2], position: "fixed", margin: 0 },
 					onMouseEnter: clearFlyoutTimer,
 					onMouseLeave: () => scheduleCloseSubFlyout(200),
 					onMouseDown: (e) => {

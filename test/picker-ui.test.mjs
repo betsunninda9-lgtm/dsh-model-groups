@@ -439,3 +439,50 @@ test('fallback also excludes deleted keys and switched-off aliases while preserv
   assert.equal(rows.some(row => /Primary Key|Backup Key|Alpha Unique|Beta Unique/.test(row.textContent)), false);
   assert.ok(rows.some(row => row.textContent === 'Other Raw ModelProvider A'));
 });
+
+
+test('flyout mode keeps parent, key and model panels adjacent on narrow screens and selects exact key', async t => {
+  const ui = openModels(mount(t));
+  ui.resize(390, 700);
+  ui.click(ui.button('Flyout'));
+  ui.click(heading(ui, 'route-a'));
+  assert.equal(ui.all('[data-flyout-level]').length, 2);
+  ui.click(ui.one('[data-flyout-level="1"]').querySelectorAll('button').find(node => node.textContent.startsWith('Primary Key')));
+  assert.equal(ui.all('[data-flyout-level]').length, 3);
+  for (const width of [320, 390, 1280]) {
+    ui.resize(width, 700);
+    const panels = ui.all('[data-flyout-level]').map(node => node.props.style).sort((a, b) => a.left - b.left);
+    assert.equal(panels.length, 3);
+    for (let index = 1; index < panels.length; index++) assert.ok(panels[index - 1].left + panels[index - 1].width <= panels[index].left + 1e-8);
+    assert.ok(panels.every(panel => panel.width > 0 && panel.left >= 12 && panel.left + panel.width <= width - 12 + 1e-8));
+  }
+  ui.click(choice(ui, 'route-a', alpha));
+  await ui.settle();
+  assert.deepEqual(ui.selections, [route(alpha)]);
+  assert.equal(ui.all('[data-flyout-level]').length, 0);
+  assertHealthy(ui);
+});
+
+test('closing a provider also removes its model descendant panel', t => {
+  const ui = openModels(mount(t));
+  ui.click(ui.button('Flyout'));
+  ui.click(heading(ui, 'route-a'));
+  ui.click(ui.one('[data-flyout-level="1"]').querySelectorAll('button').find(node => node.textContent.startsWith('Primary Key')));
+  ui.click(heading(ui, 'route-a'));
+  assert.equal(ui.all('[data-flyout-level]').length, 0);
+  assert.equal(ui.all('[data-model-choice]').length, 0);
+});
+
+test('returning to the key panel cancels parent leave before a child closes', async t => {
+  const ui = openModels(mount(t));
+  ui.click(ui.button('Flyout'));
+  ui.click(heading(ui, 'route-a'));
+  ui.click(ui.one('[data-flyout-level="1"]').querySelectorAll('button').find(node => node.textContent.startsWith('Primary Key')));
+  ui.mouse(ui.one('[data-flyout-level="1"]'), 'onMouseLeave');
+  ui.mouse(ui.one('[data-flyout-level="2"]'), 'onMouseLeave');
+  await new Promise(resolve => setTimeout(resolve, 230));
+  await ui.settle();
+  assert.equal(ui.all('[data-flyout-level]').length, 2, 'key panel must survive the cancelled parent timer');
+  assert.equal(ui.all('[data-flyout-level="2"]').length, 0);
+  assertHealthy(ui);
+});
