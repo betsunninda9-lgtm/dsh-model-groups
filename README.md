@@ -35,8 +35,8 @@
 
 请在**未安装旧多 Key 宿主补丁的测试设备**上进行首次验收。
 
-1. 取得明确标注 `0.4.0-beta.1` 的 `.tgz` 安装包。
-2. 在 DSH 插件管理器中安装该本地包；若所在界面只提供包地址输入，可让该测试设备上的 DSH 助手调用插件管理器安装下载后的完整路径。
+1. 在测试设备打开 [GitHub 测试版下载页](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/tag/v0.4.0-beta.1)，或使用[安装包直链](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.4.0-beta.1/dsh-model-groups-0.4.0-beta.1.tgz)。
+2. 将安装包直链填入 DSH 插件管理器的安装地址，或让测试设备上的 DSH 助手使用该地址安装。也可以先用浏览器下载，再通过插件管理器安装本地文件。
 3. 根据插件管理器返回结果操作：已应用则刷新 Harness 页面；若提示需要重启，通过所在应用重启引擎一次。
 4. 打开设置中的 **模型分组 / Model groups**，新建供应商与配置。
 5. 输入该配置的密钥和模型列表并保存，返回聊天页打开模型分组菜单。
@@ -46,8 +46,9 @@
 如需交给测试设备的助手，可复制：
 
 ```text
-请通过 DSH 插件管理器安装我提供的 dsh-model-groups
-0.4.0-beta.1 tgz 文件。先确认 DSH 是 0.2.2-rc.1。
+请通过 DSH 插件管理器安装以下免补丁测试包：
+https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.4.0-beta.1/dsh-model-groups-0.4.0-beta.1.tgz
+先确认 DSH 是 0.2.2-rc.1。
 不要下载 npm latest，不要运行旧 native-patches/setup 脚本，
 不要修改宿主文件、原有供应商或凭据。
 安装后报告管理器的实际应用结果；如果需要重启，
