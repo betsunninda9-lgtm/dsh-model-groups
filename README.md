@@ -24,22 +24,22 @@
 在目标设备的 DSH 环境中执行：
 
 ```bash
-dsh plugin --profile web add https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.4-beta.4/dsh-model-groups-0.3.4-beta.4.tgz
+dsh plugin --profile web add dsh-model-groups@0.3.4 --registry=https://registry.npmjs.org/
 ```
 
-安装包：[下载页面](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/tag/v0.3.4-beta.4)。`web` 为 dsh-go 本机常用 profile，其他环境请使用实际 profile。
+安装包：[npm](https://www.npmjs.com/package/dsh-model-groups) · [GitHub 发布页](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/tag/v0.3.4)。`web` 为 dsh-go 本机常用 profile，其他环境请使用实际 profile。
 
 插件加载并提示“补丁已自动安装”后，保存草稿，**重启原 DSH 引擎并刷新网页**。无需先停止引擎，也不需要外部终端手工打补丁。
 
 如果安装后插件尚未加载，先启动或重启引擎；若此次启动才应用补丁，再重启一次以载入新模块。补丁已在磁盘就绪时，后续加载不会重复写入。
 
-安装地址固定到已验证的 `0.3.4-beta.4` 发布包。该版本号仍带预发布标识；npm 默认版本与此包可能不同，请使用上面的完整命令。
+当前正式版为 `0.3.4`，包含已验证的自动补丁安装与侧边面板修复。
 
 ### 交给 AI 安装
 
 ```text
 请按 https://github.com/betsunninda9-lgtm/dsh-model-groups 的安装说明，
-使用其中的 GitHub 发布包安装到当前 DSH profile。
+使用 npm 正式版安装到当前 DSH profile。
 我允许插件自动校验、备份并应用宿主补丁；保留现有配置。
 检查加载日志，成功后提醒我重启原引擎并刷新网页；遇到不兼容就停止报告。
 ```
