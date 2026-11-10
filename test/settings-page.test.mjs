@@ -172,11 +172,32 @@ test('warnings remain actionable, details start collapsed, and copied diagnostic
 
 test('idle status distinguishes pristine disk and failed phase takes precedence', async () => {
   const app = ui([response(sample({ patches: [{ state: 'pristine' }] })), response(sample({ phase: 'failed' }))]);
-  await app.settle(); assert.match(app.text(), /多密钥尚未启用（磁盘状态）/);
+  await app.settle(); assert.match(app.text(), /多密钥已关闭（磁盘状态）/);
   app.click('刷新检查'); await app.settle(); assert.match(app.text(), /维护失败，未确认完成/);
   assert.doesNotMatch(app.text(), /多密钥已启用（磁盘状态）/); app.dispose();
 });
 
+for (const phase of ['idle', 'applied', 'restored', 'removed']) {
+  test(`${phase} does not imply restart without actual process-local file changes`, async () => {
+    const app = ui([response(sample({ phase, restartRequired: false, patches: [{ state: 'pristine' }] }))]);
+    await app.settle();
+    assert.doesNotMatch(app.text(), /需要重启原引擎|需重启原引擎|完成操作后需要/);
+    assert.match(app.text(), /运行时.*未知/);
+    app.dispose();
+  });
+}
+test('patched updates survive sanitization and show an actionable update button', async () => {
+  const initial = sample({ canApply: true, patches: [{ state: 'patched', updateAvailable: true }] });
+  const app = ui([response(initial), response(initial), response(sample({ phase: 'applied', restartRequired: true }))]);
+  await app.settle();
+  assert.equal(app.button('更新多密钥补丁').props.disabled, false);
+  assert.match(app.text(), /更新可用/);
+  assert.equal(app.button('启用多密钥'), undefined);
+  app.click('更新多密钥补丁'); app.click('确认执行'); await app.settle();
+  assert.equal(JSON.parse(app.calls[2][1].body).action, 'apply');
+  assert.match(app.text(), /需要重启原引擎/); app.dispose();
+  assert.throws(() => maintenanceSnapshot(sample({ patches: [{ state: 'patched', updateAvailable: 'yes' }] })));
+});
 test('snapshot warnings are optional and invalid warnings fail closed', () => {
   assert.deepEqual(maintenanceSnapshot(sample()).warnings, []);
   assert.throws(() => maintenanceSnapshot(sample({ warnings: 'invalid' })));

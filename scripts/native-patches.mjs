@@ -44,20 +44,25 @@ export function planPatches(dshRoot, mode = 'check', artifactDirectory = path.jo
     if (pkg.name !== artifact.packageName || pkg.version !== artifact.version) throw new Error('Installed native package version mismatch');
     const source = fs.readFileSync(file, 'utf8');
     const hash = sha256(source);
-    if (artifact.variants !== undefined) {
-      if (!Array.isArray(artifact.variants) || artifact.variants.some(variant => !/^[0-9a-f]{64}$/.test(variant.baseSha256) || !/^[0-9a-f]{64}$/.test(variant.resultSha256))) throw new Error('Invalid patch variants');
-      const candidates = [artifact, ...artifact.variants];
-      const matched = candidates.filter(variant => hash === variant.baseSha256 || hash === variant.resultSha256);
-      if (matched.length > 1) throw new Error('Ambiguous patch variant');
-      if (matched.length === 1) artifact = { ...artifact, baseSha256: matched[0].baseSha256, resultSha256: matched[0].resultSha256 };
-    }
+    const primary = artifact;
+    if (artifact.variants !== undefined && (!Array.isArray(artifact.variants) || artifact.variants.some(variant => !/^[0-9a-f]{64}$/.test(variant.baseSha256) || !/^[0-9a-f]{64}$/.test(variant.resultSha256) || (variant.replacements !== undefined && !Array.isArray(variant.replacements))))) throw new Error('Invalid patch variants');
+    const candidates = [primary, ...(primary.variants || []).map(variant => ({ ...primary, ...variant }))];
+    // A shared pristine base is intentional for legacy revisions. Prefer current
+    // output, but never guess between two different recognized patched sources.
+    const patchedMatches = candidates.filter(candidate => hash === candidate.resultSha256);
+    if (patchedMatches.length > 1) throw new Error('Ambiguous patch variant');
+    artifact = patchedMatches[0] || candidates.find(candidate => hash === candidate.baseSha256) || primary;
     const state = hash === artifact.baseSha256 ? 'pristine' : hash === artifact.resultSha256 ? 'patched' : 'modified';
     if (state === 'modified') throw new Error(`Refusing unrecognized content: ${artifact.target}`);
-    // A no-op still verifies both directions to detect a broken manifest.
-    const reverse = state === 'patched';
-    const transformed = transformSource(source, artifact, reverse);
-    const result = (mode === 'apply' && state === 'pristine') || (mode === 'revert' && state === 'patched') ? transformed : source;
-    return { name, artifact, file, source, result, state, mode: fs.statSync(file).mode & 0o777 };
+    const original = state === 'patched' ? transformSource(source, artifact, true) : source;
+    // Verify the observed revision bidirectionally, including check/no-op plans.
+    const observedPatched = transformSource(original, artifact);
+    if (state === 'patched' && observedPatched !== source) throw new Error('Patch roundtrip mismatch');
+    const targetArtifact = artifact.baseSha256 === primary.baseSha256 ? primary : artifact;
+    const latest = transformSource(original, targetArtifact);
+    const updateAvailable = state === 'patched' && sha256(latest) !== hash;
+    const result = mode === 'apply' ? latest : mode === 'revert' ? original : source;
+    return { name, artifact, file, source, result, state, updateAvailable, mode: fs.statSync(file).mode & 0o777 };
   });
 }
 

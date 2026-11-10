@@ -40,6 +40,35 @@ test('native patch check never writes and plans are idempotent in both direction
   assert.ok(f.files.every(file => fs.readFileSync(file.file, 'utf8') === file.source));
 });
 
+test('recognized legacy patched revision upgrades directly and both revisions restore pristine', t => {
+  const f = fixture(t), item = f.files[1];
+  const legacy = item.artifact;
+  const latest = { ...legacy, resultSha256: sha256('latest-ui'), replacements: [{ before: item.source, after: 'latest-ui' }], variants: [{ baseSha256: legacy.baseSha256, resultSha256: legacy.resultSha256, replacements: legacy.replacements }] };
+  fs.writeFileSync(path.join(f.artifacts, item.name), JSON.stringify(latest));
+  assert.equal(planPatches(f.root, 'apply', f.artifacts)[1].result, 'latest-ui');
+  fs.writeFileSync(item.file, 'after-1');
+  assert.equal(planPatches(f.root, 'check', f.artifacts)[1].updateAvailable, true);
+  assert.equal(planPatches(f.root, 'revert', f.artifacts)[1].result, item.source);
+  const upgrade = planPatches(f.root, 'apply', f.artifacts);
+  applyPlan(upgrade, path.join(f.root, 'upgrade-backups'));
+  assert.equal(fs.readFileSync(item.file, 'utf8'), 'latest-ui');
+  assert.equal(planPatches(f.root, 'check', f.artifacts)[1].updateAvailable, false);
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.root, 'upgrade-backups'));
+  assert.equal(fs.readFileSync(item.file, 'utf8'), item.source);
+});
+
+test('legacy revision metadata must match exact reversible source and unknown edits remain untouched', t => {
+  const f = fixture(t), item = f.files[0], legacy = item.artifact;
+  const manifest = { ...legacy, resultSha256: sha256('new-code'), replacements: [{ before: item.source, after: 'new-code' }], variants: [{ ...legacy, replacements: [{ before: item.source, after: 'wrong-code' }] }] };
+  fs.writeFileSync(path.join(f.artifacts, item.name), JSON.stringify(manifest));
+  fs.writeFileSync(item.file, 'after-0');
+  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /source did not match|hash mismatch/);
+  assert.equal(fs.readFileSync(item.file, 'utf8'), 'after-0');
+  fs.writeFileSync(item.file, 'after-0-foreign');
+  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /unrecognized content/);
+  assert.equal(fs.readFileSync(item.file, 'utf8'), 'after-0-foreign');
+});
+
 test('modified or newer native packages fail closed before any write', t => {
   const f = fixture(t); fs.appendFileSync(f.files.at(-1).file, 'concurrent edit');
   assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /unrecognized content/);
@@ -156,7 +185,8 @@ test('shipped artifacts are reversible against installed targets or skip when no
     assert.ok(fs.existsSync(targetFile), `Target file does not exist: ${targetFile}`);
     const source = fs.readFileSync(targetFile, 'utf8');
     const hash = sha256(source);
-    const variant = artifact.variants?.find(item => hash === item.baseSha256 || hash === item.resultSha256);
+    const primary = artifact;
+    const variant = artifact.variants?.find(item => hash === item.resultSha256) || (hash === artifact.baseSha256 ? undefined : artifact.variants?.find(item => hash === item.baseSha256));
     if (variant) artifact = { ...artifact, ...variant };
     if (hash === artifact.resultSha256) {
       // Installed target is already patched; test reverting it back to base
@@ -164,6 +194,11 @@ test('shipped artifacts are reversible against installed targets or skip when no
       assert.equal(sha256(pristine), artifact.baseSha256, `${name}: reverse transform did not match baseSha256`);
       const rePatched = transformSource(pristine, artifact, false);
       assert.equal(sha256(rePatched), artifact.resultSha256, `${name}: forward transform did not match resultSha256`);
+      if (primary.baseSha256 === artifact.baseSha256) {
+        const upgraded = transformSource(pristine, primary);
+        assert.equal(sha256(upgraded), primary.resultSha256, `${name}: old revision cannot upgrade to latest`);
+        assert.equal(transformSource(upgraded, primary, true), pristine);
+      }
     } else if (hash === artifact.baseSha256) {
       // Installed target is pristine; test patching and reverting
       const patched = transformSource(source, artifact, false);

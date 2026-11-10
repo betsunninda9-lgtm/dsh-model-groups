@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Readable } from 'node:stream';
+import { spawnSync } from 'node:child_process';
 import { ARTIFACTS, applyPlan, planPatches, sha256 } from '../scripts/native-patches.mjs';
 import { createMaintenance, maintenanceHandler, restorationPending, maintenanceStorage } from '../src/maintenance.js';
 import { autoPatch } from '../src/auto-patch.js';
@@ -41,7 +42,79 @@ test('confirmed restoration checks all hashes, removes only own bundle and retai
   assert.equal(autoPatch(f.root, f.home).state, 'restore-pending');
   const reloaded = createMaintenance({ root: f.root, home: f.home, artifacts: f.artifacts, manager: f.manager, inspect: async () => ({ blockers: [], fingerprint: '' }) });
   assert.equal((await reloaded.snapshot()).restartRequired, true);
+  assert.equal((await reloaded.snapshot()).phase, 'idle');
+  // A real new Node process, not createMaintenance re-instantiation, resets the
+  // process-local pending state while retaining the marker that keeps patches off.
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { createMaintenance } from ${JSON.stringify(new URL('../src/maintenance.js', import.meta.url).href)};
+    const controller = createMaintenance({ ...JSON.parse(process.argv[1]),
+      manager: { listBundles: async () => [] }, inspect: async () => ({ blockers: [], fingerprint: '' }) });
+    console.log(JSON.stringify(await controller.snapshot()));
+  `, JSON.stringify({ root: f.root, home: f.home, artifacts: f.artifacts })], { encoding: 'utf8', env: {} });
+  assert.equal(child.status, 0, child.stderr);
+  const restarted = JSON.parse(child.stdout);
+  assert.equal(restarted.restartRequired, false); assert.equal(restarted.phase, 'idle');
+  assert.equal(restorationPending(f.root, f.home), true);
   await assert.rejects(f.controller.restore(confirmation(before.token)), { code: 'CONFIRMATION_REQUIRED' });
+});
+test('inspection alone never writes restart evidence, even with a retained restore marker', async t => {
+  const f = fixture(t);
+  assert.equal((await f.controller.snapshot()).restartRequired, false);
+  assert.equal(fs.existsSync(maintenanceStorage(f.root, f.home)), false);
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.home, 'isolated-backup'));
+  const storage = maintenanceStorage(f.root, f.home);
+  fs.mkdirSync(storage, { recursive: true });
+  const marker = path.join(storage, 'restore-pending.json');
+  fs.writeFileSync(marker, JSON.stringify({ version: 1, purpose: 'explicit-restore-and-uninstall' }));
+  const before = fs.readFileSync(marker, 'utf8');
+  const reload = createMaintenance({ root: f.root, home: f.home, artifacts: f.artifacts, manager: f.manager,
+    inspect: async () => ({ blockers: [], fingerprint: '' }) });
+  const state = await reload.snapshot();
+  assert.equal(state.phase, 'idle'); assert.equal(state.restartRequired, false);
+  assert.equal(state.canRestoreOnly, false); assert.equal(state.canApply, true);
+  assert.equal(fs.readFileSync(marker, 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(storage), ['restore-pending.json']);
+});
+test('uninstalling pristine files is not a native change and does not require restart', async t => {
+  const f = fixture(t);
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.home, 'isolated-backup'));
+  const state = await f.controller.snapshot();
+  const result = await f.controller.restore(confirmation(state.token));
+  assert.equal(result.phase, 'removed'); assert.equal(result.restartRequired, false);
+  assert.equal(f.calls(), 1); assert.equal(restorationPending(f.root, f.home), true);
+});
+test('pending restart survives a maintenance module HMR import and another profile home', async t => {
+  const f = fixture(t), before = await f.controller.snapshot();
+  await f.controller.restore({ ...confirmation(before.token), action: 'restore-only' });
+  const hmr = await import(`../src/maintenance.js?hmr=${Date.now()}`);
+  const reloaded = hmr.createMaintenance({ root: f.root, home: path.join(f.home, 'another-profile'), artifacts: f.artifacts,
+    manager: f.manager, inspect: async () => ({ blockers: [], fingerprint: '' }) });
+  const state = await reloaded.snapshot();
+  assert.equal(state.restartRequired, true); assert.equal(state.phase, 'idle');
+  const unrelated = fixture(t);
+  assert.equal((await unrelated.controller.snapshot()).restartRequired, false);
+});
+test('recognized legacy patch can update through backend and frontend snapshots', async t => {
+  const f = fixture(t);
+  // Existing fixture files are the old, recognized applied revision. Upgrade its
+  // manifest to a new revision, retaining the exact old replacement as a variant.
+  const manifest = path.join(f.artifacts, ARTIFACTS[1]);
+  const legacy = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  const latest = 'latest-settings-patch';
+  fs.writeFileSync(manifest, JSON.stringify({ ...legacy, resultSha256: sha256(latest),
+    replacements: [{ before: 'before-1', after: latest }],
+    variants: [{ baseSha256: legacy.baseSha256, resultSha256: legacy.resultSha256, replacements: legacy.replacements }] }));
+  const { maintenanceSnapshot } = await import('../src/maintenance-state.js');
+  const before = maintenanceSnapshot(await f.controller.snapshot());
+  assert.equal(before.canApply, true); assert.equal(before.restartRequired, false);
+  assert.equal(before.patches[1].state, 'patched'); assert.equal(before.patches[1].updateAvailable, true);
+  const updated = maintenanceSnapshot(await f.controller.restore({ ...confirmation(before.token), action: 'apply' }));
+  assert.equal(updated.phase, 'applied'); assert.equal(updated.restartRequired, true);
+  assert.equal(updated.canApply, false); assert.ok(updated.patches.every(p => !p.updateAvailable));
+  assert.equal(fs.readFileSync(f.files[1], 'utf8'), latest);
+  const closeState = await f.controller.snapshot();
+  await f.controller.restore({ ...confirmation(closeState.token), action: 'restore-only' });
+  assert.equal(fs.readFileSync(f.files[1], 'utf8'), 'before-1');
 });
 test('advisory fingerprint changes do not require extra confirmation or block restore', async t => {
   let fingerprint = 'one';

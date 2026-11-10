@@ -13,14 +13,15 @@ export function maintenanceSnapshot(value) {
     || !Array.isArray(value.patches) || !Array.isArray(value.blockers)
     || !(value.warnings == null || (Array.isArray(value.warnings) && value.warnings.every(warning => warning && typeof warning.code === 'string'
       && (warning.count == null || (Number.isSafeInteger(warning.count) && warning.count > 0)))))
-    || !value.patches.every(patch => patch && ['patched', 'pristine', 'conflict'].includes(patch.state))
+    || !value.patches.every(patch => patch && ['patched', 'pristine', 'conflict'].includes(patch.state)
+      && (patch.updateAvailable == null || typeof patch.updateAvailable === 'boolean'))
     || !value.blockers.every(blocker => blocker && typeof blocker.code === 'string' && typeof blocker.message === 'string'
       && (blocker.count == null || (Number.isSafeInteger(blocker.count) && blocker.count > 0)))) {
     throw new Error('Invalid maintenance snapshot');
   }
   return { phase: value.phase, restartRequired: value.restartRequired, canApply: value.canApply,
     canRestoreOnly: value.canRestoreOnly, canRestore: value.canRestore,
-    token: value.token ?? null, patches: value.patches.map(patch => ({ state: patch.state })),
+    token: value.token ?? null, patches: value.patches.map(patch => ({ state: patch.state, updateAvailable: patch.updateAvailable === true })),
     blockers: value.blockers.map(blocker => ({ code: blocker.code, count: blocker.count ?? null })),
     warnings: (value.warnings ?? []).map(warning => ({ code: warning.code, count: warning.count ?? null })) };
 }

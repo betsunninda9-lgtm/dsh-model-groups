@@ -4,6 +4,12 @@ import crypto from 'node:crypto';
 import { planPatches, applyPlan, sha256 } from '../scripts/native-patches.mjs';
 
 export const BUNDLE_NAME = 'dsh-model-groups';
+// Process-local evidence survives controller replacement and module HMR, but not an
+// engine restart. The restoration marker only suppresses automatic patching: it is
+// not evidence that this process has loaded old code. A new process's runtime
+// remains unverified; checking disk must never create persistent restart state.
+const processChangesKey = Symbol.for('dsh-model-groups.maintenance.process-changes.v1');
+const processChanges = globalThis[processChangesKey] ??= new Map();
 export function maintenanceStorage(root, home) {
   return path.join(home, BUNDLE_NAME, sha256(fs.realpathSync(root)).slice(0, 16));
 }
@@ -13,10 +19,26 @@ export function restorationPending(root, home) {
 
 /** Local-only transaction. Inspection and removal are injected to keep tests off the live host. */
 export function createMaintenance({ root, home, inspect, manager, artifacts, now = Date.now }) {
-  let phase = 'idle', restartRequired = false, busy = false, ticket;
+  let phase = 'idle', busy = false, ticket;
+  const rootKey = fs.realpathSync(root);
   const storage = maintenanceStorage(root, home);
   const marker = path.join(storage, 'restore-pending.json');
-  if (fs.existsSync(marker)) { phase = 'restored'; restartRequired = true; }
+  const restartRequired = () => (processChanges.get(rootKey)?.length ?? 0) > 0;
+  function changeFiles(plans) {
+    try { applyPlan(plans, path.join(storage, 'backups')); }
+    finally {
+      // Record actual observed disk changes, not an attempted/no-op operation.
+      // Also retain evidence if verification later fails or a partial write survives.
+      const changes = plans.flatMap(plan => {
+        try {
+          const current = fs.readFileSync(plan.file, 'utf8');
+          return plan.source !== plan.result && current === plan.result
+            ? [{ file: plan.file, before: sha256(plan.source), after: sha256(current) }] : [];
+        } catch { return []; }
+      });
+      if (changes.length) processChanges.set(rootKey, [...(processChanges.get(rootKey) ?? []), ...changes]);
+    }
+  }
   const patchPlans = () => planPatches(root, 'revert', artifacts);
   const generic = (code, message) => ({ code, message });
   async function assessment() {
@@ -41,15 +63,15 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     const hardCodes = new Set(['patch_conflict', 'active_turns', 'other_process', 'not_removable', 'manager_unavailable']);
     const warnings = blockers.filter(b => !hardCodes.has(b.code.toLowerCase()));
     const hard = blockers.filter(b => hardCodes.has(b.code.toLowerCase()));
-    return { plans, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([hard, removable, plans.map(p => [p.name, sha256(p.source)])])) };
+    return { plans, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([hard, removable, plans.map(p => [p.name, sha256(p.source), !!p.updateAvailable, sha256(JSON.stringify(p.artifact))])])) };
   }
   function view(report, executing = false) {
     const valid = report.plans.length > 0 && !report.blockers.some(b => b.code.toLowerCase() === 'patch_conflict');
     const dependencies = report.blockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
     const installBlockers = dependencies;
     const available = (!busy || executing) && phase !== 'removed';
-    return { phase, restartRequired, patches: report.plans.map(p => ({ name: p.name, state: p.state })), blockers: report.blockers, warnings: report.warnings,
-      token: null, canApply: available && valid && installBlockers.length === 0 && report.plans.some(p => p.state === 'pristine'),
+    return { phase, restartRequired: restartRequired(), patches: report.plans.map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable })), blockers: report.blockers, warnings: report.warnings,
+      token: null, canApply: available && valid && installBlockers.length === 0 && report.plans.some(p => p.state === 'pristine' || p.updateAvailable),
       canRestoreOnly: available && valid && dependencies.length === 0 && report.plans.some(p => p.state === 'patched'),
       canRestore: available && valid && report.blockers.length === 0,
       notice: '关闭会保留密钥和聊天记录，不自动更换服务。旧多密钥选择可能失效，旧配置可能影响重启；使用情况未完整检查时仍可确认继续。普通插件列表卸载不会还原补丁。' };
@@ -83,32 +105,32 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
        const permitted = action === 'apply' ? permissions.canApply : action === 'restore-only' ? permissions.canRestoreOnly : permissions.canRestore;
        if (!permitted || report.stamp !== expected.stamp) throw generic('STATE_CHANGED', '文件或任务状态发生变化，请确认没有任务运行后重试。');
       if (action === 'apply') {
-        applyPlan(planPatches(root, 'apply', artifacts), path.join(storage, 'backups'));
-        if (!patchPlans().every(p => p.state === 'patched')) throw generic('VERIFY_FAILED', '补丁验证失败。');
+        changeFiles(planPatches(root, 'apply', artifacts));
+        if (!patchPlans().every(p => p.state === 'patched' && !p.updateAvailable)) throw generic('VERIFY_FAILED', '补丁验证失败。');
         // Never delete a computed or unverified path; only this exact owned marker.
         if (fs.existsSync(marker)) {
           const stat = fs.lstatSync(marker);
           if (!stat.isFile() || stat.isSymbolicLink()) throw generic('VERIFY_FAILED', '恢复标记异常。');
           fs.unlinkSync(marker);
         }
-        phase = 'applied'; restartRequired = true;
+        phase = 'applied';
         return view(await assessment());
       }
       fs.writeFileSync(marker, JSON.stringify({ version: 1, purpose: 'explicit-restore-and-uninstall' }), { mode: 0o600 });
       // Fresh synchronous planning checks concurrent target edits again; applyPlan performs an additional check.
-      applyPlan(patchPlans(), path.join(storage, 'backups'));
+      changeFiles(patchPlans());
       if (!patchPlans().every(p => p.state === 'pristine')) throw generic('VERIFY_FAILED', '原版文件复查失败，未宣告卸载成功。');
-      phase = 'restored'; restartRequired = true;
+      phase = 'restored';
       if (action === 'restore-only') return view(await assessment());
       phase = 'removing';
       const result = await manager.removeBundle(BUNDLE_NAME);
-      if (!result || result.application !== 'applied' || result.error || (result.packageResult && (result.packageResult.exitCode !== 0 || result.packageResult.timedOut))) throw generic('REMOVE_FAILED', '补丁已还原，但插件卸载失败。请保留恢复标记并在插件列表中重试卸载，然后重启。');
+      if (!result || result.application !== 'applied' || result.error || (result.packageResult && (result.packageResult.exitCode !== 0 || result.packageResult.timedOut))) throw generic('REMOVE_FAILED', '已确认原版文件，但插件卸载失败。请保留恢复标记并在插件列表中重试卸载；是否需要重启以文件修改记录为准。');
       const remaining = (await manager.listBundles()).find(item => item.name === BUNDLE_NAME);
       if (remaining?.installed || remaining?.removable || remaining?.enabled) throw generic('REMOVE_UNVERIFIED', '尚未确认插件依赖已移除，请检查插件列表；补丁不会自动重新安装。');
       if (!patchPlans().every(p => p.state === 'pristine')) throw generic('VERIFY_FAILED', '卸载后宿主文件再次变化，不能确认完整恢复。');
       phase = 'removed';
-      return { phase, restartRequired: true, patches: patchPlans().map(p => ({ name: p.name, state: p.state })), blockers: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null,
-        notice: '已还原原版文件并确认插件依赖移除。请重启原引擎并刷新。密钥、历史和安全备份未删除；其他浏览器的本插件显示偏好可自行清除。' };
+      return { phase, restartRequired: restartRequired(), patches: patchPlans().map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable })), blockers: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null,
+        notice: '已确认原版文件和插件依赖移除状态。密钥、历史和安全备份未删除；运行时状态未验证，是否需要重启以本进程实际文件修改记录为准。' };
     } catch (error) {
       phase = 'failed';
       throw ['STATE_CHANGED', 'VERIFY_FAILED', 'REMOVE_FAILED', 'REMOVE_UNVERIFIED'].includes(error?.code) ? error : generic('MAINTENANCE_FAILED', '维护未完成。未宣告成功；如已还原文件，恢复标记会阻止自动重新打补丁。请检查后重试。');
