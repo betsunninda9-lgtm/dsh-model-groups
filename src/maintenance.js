@@ -39,7 +39,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
   }
   function view(report) {
     return { phase, restartRequired, patches: report.plans.map(p => ({ name: p.name, state: p.state })), blockers: report.blockers,
-      canRestore: !busy && phase !== 'removed' && report.blockers.length === 0,
+      token: null, canRestore: !busy && phase !== 'removed' && report.blockers.length === 0,
       notice: '只还原本插件已知补丁并卸载本插件。密钥、会话历史及安全备份保留；完成后须重启原引擎并刷新页面。失败时保留恢复标记，防止自动重新打补丁。' };
   }
   async function snapshot() {
@@ -78,7 +78,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       if (remaining?.installed || remaining?.removable || remaining?.enabled) throw generic('REMOVE_UNVERIFIED', '尚未确认插件依赖已移除，请检查插件列表；补丁不会自动重新安装。');
       if (!patchPlans().every(p => p.state === 'pristine')) throw generic('VERIFY_FAILED', '卸载后宿主文件再次变化，不能确认完整恢复。');
       phase = 'removed';
-      return { phase, restartRequired: true, patches: patchPlans().map(p => ({ name: p.name, state: p.state })), blockers: [], canRestore: false,
+      return { phase, restartRequired: true, patches: patchPlans().map(p => ({ name: p.name, state: p.state })), blockers: [], canRestore: false, token: null,
         notice: '已还原原版文件并确认插件依赖移除。请重启原引擎并刷新。密钥、历史和安全备份未删除；其他浏览器的本插件显示偏好可自行清除。' };
     } catch (error) {
       phase = 'failed';
