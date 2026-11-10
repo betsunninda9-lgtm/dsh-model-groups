@@ -11,6 +11,8 @@ export function maintenanceSnapshot(value) {
     || !(value.token == null || (typeof value.token === 'string' && value.token.length > 0))
     || (Object.values(ACTION_CAPABILITIES).some(key => value[key]) && !(typeof value.token === 'string' && value.token.length > 0))
     || !Array.isArray(value.patches) || !Array.isArray(value.blockers)
+    || !(value.warnings == null || (Array.isArray(value.warnings) && value.warnings.every(warning => warning && typeof warning.code === 'string'
+      && (warning.count == null || (Number.isSafeInteger(warning.count) && warning.count > 0)))))
     || !value.patches.every(patch => patch && ['patched', 'pristine', 'conflict'].includes(patch.state))
     || !value.blockers.every(blocker => blocker && typeof blocker.code === 'string' && typeof blocker.message === 'string'
       && (blocker.count == null || (Number.isSafeInteger(blocker.count) && blocker.count > 0)))) {
@@ -19,7 +21,8 @@ export function maintenanceSnapshot(value) {
   return { phase: value.phase, restartRequired: value.restartRequired, canApply: value.canApply,
     canRestoreOnly: value.canRestoreOnly, canRestore: value.canRestore,
     token: value.token ?? null, patches: value.patches.map(patch => ({ state: patch.state })),
-    blockers: value.blockers.map(blocker => ({ code: blocker.code, count: blocker.count ?? null })) };
+    blockers: value.blockers.map(blocker => ({ code: blocker.code, count: blocker.count ?? null })),
+    warnings: (value.warnings ?? []).map(warning => ({ code: warning.code, count: warning.count ?? null })) };
 }
 export function maintenanceCanAction(snapshot, action) {
   const capability = Object.hasOwn(ACTION_CAPABILITIES, action) ? ACTION_CAPABILITIES[action] : null;
@@ -46,14 +49,14 @@ export function maintenanceBlockerText(blocker) {
     not_applicable: '当前状态不允许安全应用补丁。',
     manager_unavailable: '插件管理服务不可用，请稍后重试。',
     host_unknown: '无法验证宿主版本，不会修改未知文件。',
-    state_changed: '状态已发生变化，请刷新检查后重新勾选确认。',
+    state_changed: '状态已发生变化，请刷新检查后重新打开操作并确认。',
     apply_failed: '补丁应用未完成，请刷新检查，不要视为成功。',
     restore_failed: '原版恢复未完成，请刷新检查，不要视为成功。',
     remove_failed: '卸载未完成，请刷新检查并使用安装诊断排查。',
     remove_unverified: '无法验证卸载结果，请刷新检查，不要视为成功。',
     verify_failed: '安全验证失败，不会强制覆盖文件。',
     busy: '维护或其他任务正在运行，请结束后刷新。',
-    confirmation_required: '安全确认已失效，请刷新检查后重新勾选确认。',
+    confirmation_required: '安全确认已失效，请刷新检查后重新打开操作并确认。',
     maintenance_failed: '维护失败，请刷新检查并使用安装诊断排查。',
     inspection_unknown: '无法确认运行状态，请先停止任务并使用安装诊断排查。',
     profile_unknown: '无法确认当前配置档，不会执行维护。',
@@ -65,6 +68,41 @@ export function maintenanceBlockerText(blocker) {
   };
   return (labels[blocker.code.toLowerCase()] || '安全检查未通过，请先处理运行中的任务或使用安装诊断排查。')
     + (blocker.count ? `（${blocker.count} 项）` : '');
+}
+
+// Copy only allowlisted codes and enumerated state: unknown codes may contain secrets or paths.
+export function maintenanceDiagnostic(state) {
+  const snapshot = state.snapshot;
+  const knownCodes = new Set(['active_sessions', 'active_turns', 'patch_conflict', 'backup_missing', 'restart_required',
+    'inspection_failed', 'config_inspection_failed', 'session_inspection_failed', 'session_service_missing',
+    'process_inspection_failed', 'profile_inspection_failed', 'patch_inspection_failed', 'default_inspection_failed',
+    'agent_inspection_failed', 'activity_unverified', 'not_removable', 'not_applicable', 'manager_unavailable',
+    'host_unknown', 'state_changed', 'apply_failed', 'restore_failed', 'remove_failed', 'remove_unverified',
+    'verify_failed', 'busy', 'confirmation_required', 'maintenance_failed', 'inspection_unknown', 'profile_unknown',
+    'cross_profile_bundle', 'alias_dependency', 'key_config_dependency', 'expression_unknown', 'other_process']);
+  const diagnosticItem = item => {
+    const code = item.code.toLowerCase();
+    return { code: knownCodes.has(code) ? code : 'unknown', count: item.count };
+  };
+  return JSON.stringify({
+    status: snapshot?.phase ?? 'unknown', busy: !!state.busy, resultUnverified: !!state.error,
+    restartRequired: snapshot?.restartRequired ?? null,
+    capabilities: snapshot ? { apply: snapshot.canApply, close: snapshot.canRestoreOnly, uninstall: snapshot.canRestore } : null,
+    patches: snapshot?.patches.map(patch => patch.state) ?? [],
+    blockers: snapshot?.blockers.map(diagnosticItem) ?? [],
+    warnings: snapshot?.warnings.map(diagnosticItem) ?? [],
+  }, null, 2);
+}
+export function maintenanceWarningText(warning) {
+  const labels = {
+    alias_dependency: '旧多密钥模型选择可能影响后续使用或重启；本页不会自动切换服务或模型。',
+    key_config_dependency: '旧多密钥配置可能影响后续使用或重启；关闭会保留密钥和历史，不自动转换配置。',
+    expression_unknown: '部分配置表达式无法完整检查，请留意关闭后的使用和重启情况。',
+  };
+  const code = warning.code.toLowerCase();
+  const inspection = ['config_inspection_failed', 'session_inspection_failed', 'session_service_missing', 'process_inspection_failed', 'profile_inspection_failed', 'inspection_unknown', 'default_inspection_failed', 'agent_inspection_failed', 'activity_unverified'];
+  return (labels[code] || (inspection.includes(code) ? '检查不完整，无法确认全部依赖；这只是提醒，不会额外禁用操作。' : '部分使用情况未能验证，不等于安全；这只是提醒，不会额外禁用操作。'))
+    + (warning.count ? `（${warning.count} 项）` : '');
 }
 
 export function createMaintenanceController({ request = (...args) => fetch(...args), storage = () => globalThis.localStorage } = {}) {
@@ -103,7 +141,7 @@ export function createMaintenanceController({ request = (...args) => fetch(...ar
       if (action) {
         if (snapshot.token !== token || !maintenanceCanAction(snapshot, action)) {
           accept(snapshot);
-          update({ error: '状态已发生变化或操作被阻止，未执行操作。请检查当前状态并重新勾选确认。' });
+          update({ error: '状态已发生变化或操作被阻止，未执行操作。请检查当前状态并重新打开操作并确认。' });
           return;
         }
         update({ snapshot: { ...snapshot, canApply: false, canRestoreOnly: false, canRestore: false, token: null } });

@@ -21,35 +21,38 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
   const generic = (code, message) => ({ code, message });
   async function assessment() {
     const blockers = [];
-    let plans = [], fingerprint = '', removable = false;
+    let plans = [], removable = false;
     try { plans = patchPlans(); }
     catch { blockers.push(generic('PATCH_CONFLICT', '宿主版本或文件校验不匹配；未修改任何宿主文件，请先处理冲突。')); }
     try {
       const report = await inspect();
       if (!report || !Array.isArray(report.blockers) || typeof report.fingerprint !== 'string') throw new Error('inspection');
       blockers.push(...report.blockers);
-      fingerprint = report.fingerprint;
-    } catch { blockers.push(generic('INSPECTION_FAILED', '无法完整检查配置和会话，已禁止恢复。')); }
+    } catch { blockers.push(generic('INSPECTION_FAILED', '部分配置和会话使用情况未能检查；关闭后可能需要重新配置普通模型。')); }
     try {
       const bundles = await manager.listBundles();
       const bundle = bundles.find(item => item.name === BUNDLE_NAME);
       removable = !!bundle?.removable;
        if (!removable) blockers.push(generic('NOT_REMOVABLE', '当前插件不属于可卸载的 profile 依赖，请使用安装它的原 profile 管理器。'));
     } catch { blockers.push(generic('MANAGER_UNAVAILABLE', '插件管理器不可用，无法安全卸载。')); }
-    return { plans, blockers, removable, stamp: sha256(JSON.stringify([fingerprint, blockers, removable, plans.map(p => [p.name, sha256(p.source)])])) };
+    // Dependency observations describe consequences, not permission to overwrite files.
+    // Only proven activity, other engines sharing the installation and file conflicts
+    // stop patch changes. Unknown observations remain visible for explicit consent.
+    const hardCodes = new Set(['patch_conflict', 'active_turns', 'other_process', 'not_removable', 'manager_unavailable']);
+    const warnings = blockers.filter(b => !hardCodes.has(b.code.toLowerCase()));
+    const hard = blockers.filter(b => hardCodes.has(b.code.toLowerCase()));
+    return { plans, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([hard, removable, plans.map(p => [p.name, sha256(p.source)])])) };
   }
   function view(report, executing = false) {
     const valid = report.plans.length > 0 && !report.blockers.some(b => b.code.toLowerCase() === 'patch_conflict');
     const dependencies = report.blockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
-    // Installation adds supported capabilities, so legacy config dependencies do not
-    // block it. Activity/process uncertainty still requires a maintenance window.
-    const installBlockers = dependencies.filter(b => ['patch_conflict', 'active_turns', 'other_process', 'session_service_missing', 'session_inspection_failed', 'process_inspection_failed', 'inspection_unknown', 'inspection_failed'].includes(b.code.toLowerCase()));
+    const installBlockers = dependencies;
     const available = (!busy || executing) && phase !== 'removed';
-    return { phase, restartRequired, patches: report.plans.map(p => ({ name: p.name, state: p.state })), blockers: report.blockers,
+    return { phase, restartRequired, patches: report.plans.map(p => ({ name: p.name, state: p.state })), blockers: report.blockers, warnings: report.warnings,
       token: null, canApply: available && valid && installBlockers.length === 0 && report.plans.some(p => p.state === 'pristine'),
-      canRestoreOnly: available && valid && dependencies.length === 0,
+      canRestoreOnly: available && valid && dependencies.length === 0 && report.plans.some(p => p.state === 'patched'),
       canRestore: available && valid && report.blockers.length === 0,
-      notice: '补丁不会自动安装。普通卸载保留宿主修改，升级可能出现兼容问题。移除前须解决旧路由依赖；不会删除凭据或改写历史。' };
+      notice: '关闭会保留密钥和聊天记录，不自动更换服务。旧多密钥选择可能失效，旧配置可能影响重启；使用情况未完整检查时仍可确认继续。普通插件列表卸载不会还原补丁。' };
   }
   async function snapshot() {
     const report = await assessment();
@@ -78,7 +81,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       const report = await assessment();
       const permissions = view(report, true);
        const permitted = action === 'apply' ? permissions.canApply : action === 'restore-only' ? permissions.canRestoreOnly : permissions.canRestore;
-       if (!permitted || report.stamp !== expected.stamp) throw generic('STATE_CHANGED', '检查结果发生变化或仍有依赖，请重新检查后处理。');
+       if (!permitted || report.stamp !== expected.stamp) throw generic('STATE_CHANGED', '文件或任务状态发生变化，请确认没有任务运行后重试。');
       if (action === 'apply') {
         applyPlan(planPatches(root, 'apply', artifacts), path.join(storage, 'backups'));
         if (!patchPlans().every(p => p.state === 'patched')) throw generic('VERIFY_FAILED', '补丁验证失败。');

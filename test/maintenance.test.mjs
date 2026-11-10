@@ -43,13 +43,13 @@ test('confirmed restoration checks all hashes, removes only own bundle and retai
   assert.equal((await reloaded.snapshot()).restartRequired, true);
   await assert.rejects(f.controller.restore(confirmation(before.token)), { code: 'CONFIRMATION_REQUIRED' });
 });
-test('blockers and changed dependency fingerprint stop before any disk restore', async t => {
+test('advisory fingerprint changes do not require extra confirmation or block restore', async t => {
   let fingerprint = 'one';
   const f = fixture(t, { inspect: async () => ({ blockers: [], fingerprint }) });
   const before = await f.controller.snapshot(); fingerprint = 'two';
-  await assert.rejects(f.controller.restore(confirmation(before.token)), { code: 'STATE_CHANGED' });
-  assert.ok(planPatches(f.root, 'check', f.artifacts).every(p => p.state === 'patched'));
-  assert.equal(f.calls(), 0); assert.equal(restorationPending(f.root, f.home), false);
+  assert.equal((await f.controller.restore(confirmation(before.token))).phase, 'removed');
+  assert.ok(planPatches(f.root, 'check', f.artifacts).every(p => p.state === 'pristine'));
+  assert.equal(f.calls(), 1); assert.equal(restorationPending(f.root, f.home), true);
 });
 test('foreign edits block before writes and do not overwrite another lock', async t => {
   const f = fixture(t), before = await f.controller.snapshot();
@@ -70,9 +70,10 @@ test('failed or restart-only manager result never reports removed; marker preven
     assert.ok(planPatches(f.root, 'check', f.artifacts).every(p => p.state === 'pristine'));
   }
 });
-test('missing inspection and expired confirmation fail closed', async t => {
+test('missing inspection is a sanitized warning but expired confirmation still fails', async t => {
   const bad = fixture(t, { inspect: async () => { throw new Error('private secret path'); } });
-  const report = await bad.controller.snapshot(); assert.equal(report.canRestore, false); assert.ok(!JSON.stringify(report).includes('private secret'));
+  const report = await bad.controller.snapshot(); assert.equal(report.canRestore, true); assert.equal(report.warnings[0].code, 'INSPECTION_FAILED'); assert.ok(!JSON.stringify(report).includes('private secret'));
+  assert.equal((await bad.controller.restore(confirmation(report.token))).phase, 'removed');
   let clock = 1;
   const f = fixture(t, { now: () => clock }), before = await f.controller.snapshot(); clock = 130000;
   await assert.rejects(f.controller.restore(confirmation(before.token)), { code: 'CONFIRMATION_REQUIRED' });
@@ -83,6 +84,24 @@ async function request(handler, method, body, admission = { peer: { principal: {
   await maintenanceHandler(handler, { admit: () => admission })(req, res);
   return { status, body: JSON.parse(text) };
 }
+test('legacy dependencies and unavailable inspection are warnings for all patch actions', async t => {
+  const codes = ['alias_dependency', 'key_config_dependency', 'expression_unknown', 'profile_unknown', 'config_inspection_failed', 'session_inspection_failed', 'process_inspection_failed', 'activity_unverified'];
+  const f = fixture(t, {inspect: async () => ({blockers: codes.map(code => ({code, message:'unverified', count:65})), fingerprint:'advice'})});
+  let state = await f.controller.snapshot();
+  assert.equal(state.blockers.length, 0); assert.equal(state.warnings.length, codes.length);
+  assert.equal(state.canRestoreOnly, true); assert.equal(state.canRestore, true);
+  await f.controller.restore({action:'restore-only', token:state.token, confirmation:'CONFIRM PATCH OPERATION'});
+  state = await f.controller.snapshot(); assert.equal(state.canApply,true);
+  await f.controller.restore({action:'apply', token:state.token, confirmation:'CONFIRM PATCH OPERATION'});
+  assert.ok(planPatches(f.root,'check',f.artifacts).every(p=>p.state==='patched'));
+});
+test('newly proven activity blocks a previously confirmed removal', async t => {
+  let active=false;
+  const f=fixture(t,{inspect:async()=>({blockers:active?[{code:'active_turns',message:'stop'}]:[],fingerprint:String(active)})});
+  const state=await f.controller.snapshot(); active=true;
+  await assert.rejects(f.controller.restore(confirmation(state.token)),{code:'STATE_CHANGED'});
+  assert.ok(planPatches(f.root,'check',f.artifacts).every(p=>p.state==='patched'));
+});
 test('HTTP owner admission, JSON-only, bounded body and safe errors', async () => {
   let calls = 0;
   const controller = { snapshot: async () => ({ phase: 'idle' }), restore: async () => { calls++; return { phase: 'removed' }; } };
@@ -118,7 +137,18 @@ test('HTTP owner admission, JSON-only, bounded body and safe errors', async () =
   await f.controller.restore({action:'restore-only',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
   assert.ok(planPatches(f.root,'check',f.artifacts).every(p=>p.state==='pristine'));
  });
- test('apply rejects active inspection blockers and unknown file states', async t => {
+ test('other engines sharing the installation stay hard blockers', async t => {
+  const f=fixture(t,{inspect:async()=>({blockers:[{code:'other_process',message:'stop'}],fingerprint:'other'})});
+  const state=await f.controller.snapshot();
+  assert.equal(state.canRestoreOnly,false); assert.equal(state.canRestore,false);
+  assert.equal(state.blockers[0].code,'other_process');
+});
+test('already pristine files do not offer redundant close-only action',async t=>{
+  const f=fixture(t); applyPlan(planPatches(f.root,'revert',f.artifacts),path.join(f.home,'isolated-backup'));
+  const state=await f.controller.snapshot();
+  assert.equal(state.canRestoreOnly,false); assert.equal(state.canApply,true); assert.equal(state.canRestore,true);
+});
+test('apply rejects active inspection blockers and unknown file states', async t => {
   const f = fixture(t,{inspect:async()=>({blockers:[{code:'active_turns',message:'stop'}],fingerprint:'x'})});
   applyPlan(planPatches(f.root,'revert',f.artifacts),path.join(f.home,'isolated-backup'));
   assert.equal((await f.controller.snapshot()).canApply,false);

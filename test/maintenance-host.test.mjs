@@ -95,8 +95,12 @@ test('inspection reads fixture profiles only and blocks other-profile residuals 
   ctx.agents.list = () => [{ id: 'a', options: {}, model: { current: () => undefined }, status: 'idle', phase: { kind: 'maintenance' } }];
   assert.ok((await inspect()).blockers.some(b => b.code === 'active_turns'));
   delete ctx.sessionPersistence;
-  assert.ok((await inspect()).blockers.some(b => b.code === 'session_service_missing'));
+  assert.ok(!(await inspect()).blockers.some(b => b.code === 'session_service_missing'));
   ctx.sessionPersistence = {};
+  ctx.agents.list = () => [{ id: 'unknown', options: {}, model: { current: () => undefined }, status: 'future-status' }];
+  const unknownActivity = await inspect();
+  assert.ok(unknownActivity.blockers.some(b => b.code === 'activity_unverified'));
+  assert.ok(!unknownActivity.blockers.some(b => b.code === 'active_turns'));
   ctx.agents.list = () => [];
   ctx.sessionQuery.listSessions = async () => [];
   fs.writeFileSync(path.join(home, 'profiles/other/package.json'), '{}');
@@ -105,21 +109,59 @@ test('inspection reads fixture profiles only and blocks other-profile residuals 
   // A fixture installation has no competing DSH processes; the clean path stays usable.
   assert.deepEqual(clean.blockers, []);
   assert.notEqual(clean.fingerprint, result.fingerprint);
-  // describe may be synchronous (installed API) or asynchronous (host adapters).
-  ctx.settings.describe = async () => Array.from({ length: 95 }, (_, i) => ({ ns: `generic-${i}`, value: { timeout: { __jsExpr: 'opaque' } } }));
+  let describeCalls = 0;
+  ctx.settings.describe = () => { describeCalls++; throw Error('must never evaluate settings'); };
   assert.deepEqual((await inspect()).blockers, []);
-  ctx.settings.describe = async () => [{ ns: 'route', user: { model: { __jsExpr: 'opaque' } } }];
+  assert.equal(describeCalls, 0);
+  ctx.configEditor.configuration = () => [{ entry: { options: { name: 'route', config: { model: { __jsExpr: 'opaque' } } } } }];
   assert.ok((await inspect()).blockers.some(b => b.code === 'expression_unknown'));
-  ctx.settings.describe = async () => { throw Error('private settings failure'); };
+  ctx.configEditor.configuration = () => { throw Error('private config failure'); };
+  ctx.agentDefaultModel.currentSelection = () => { throw Error('private default failure'); };
+  ctx.sessionQuery.listSessions = async () => { throw Error('private session-list failure'); };
+  ctx.agents.list = () => [{ id: 'a', options: {}, model: { current: () => { throw Error('private model failure'); } }, status: 'idle', phase: { kind: 'maintenance' } }];
   let failure = await inspect();
-  assert.ok(failure.blockers.some(b => b.code === 'config_inspection_failed'));
+  for (const code of ['config_inspection_failed', 'default_inspection_failed', 'session_inspection_failed', 'agent_inspection_failed', 'active_turns']) {
+    assert.ok(failure.blockers.some(b => b.code === code), code);
+  }
   assert.ok(!JSON.stringify(failure).includes('private'));
-  ctx.settings.describe = () => [];
+  assert.equal(describeCalls, 0);
+  const duplicate = { entry: { options: { name: 'route', config: { model: '@dsh-key/duplicate/m' } } } };
+  ctx.configEditor.configuration = () => [duplicate, duplicate];
+  assert.equal((await inspect()).blockers.find(b => b.code === 'alias_dependency').count, 1);
+  ctx.configEditor.configuration = () => [];
+  ctx.agentDefaultModel.currentSelection = () => ({ provider: 'p', model: 'normal' });
+  ctx.agents.list = () => [{ id: 'running', options: {}, model: { current: () => undefined }, status: 'running', phase: { kind: 'new-phase' } }];
+  assert.ok((await inspect()).blockers.some(b => b.code === 'active_turns'));
+  ctx.agents.list = () => [];
   ctx.sessionQuery.listSessions = async () => [{ header: { id: 's' }, live: false, persisted: true }];
   ctx.sessionQuery.readSession = async id => { assert.equal(id, 's'); throw Error('private session failure'); };
   failure = await inspect();
   assert.ok(failure.blockers.some(b => b.code === 'session_inspection_failed'));
   assert.ok(!failure.blockers.some(b => b.code === 'session_service_missing'));
+  // One failed snapshot does not suppress later live sessions or their dependencies.
+  const reads = [];
+  ctx.sessionQuery.listSessions = async () => ['bad', 'good'].map(id => ({ header: { id }, live: true }));
+  const session = { id: 'good' }; session.self = session;
+  let body = 'private chat text';
+  ctx.sessionQuery.readSession = async id => {
+    reads.push(id);
+    if (id === 'bad') throw Error('private snapshot failure');
+    return { session, events: [{ type: 'message', data: { body, session } },
+      { type: 'model/selection', data: { provider: 'p', model: '@dsh-key/good/m' } }, { type: 'turn/start' }] };
+  };
+  failure = await inspect();
+  assert.deepEqual(reads, ['bad', 'good']);
+  for (const code of ['session_inspection_failed', 'alias_dependency', 'active_turns']) assert.ok(failure.blockers.some(b => b.code === code), code);
+  assert.ok(!JSON.stringify(failure).includes('private'));
+  body = 'entirely different chat text';
+  assert.equal((await inspect()).fingerprint, failure.fingerprint);
+  ctx.sessionQuery.listSessions = async () => [{ header: { id: 'good' }, live: false }];
+  assert.ok(!(await inspect()).blockers.some(b => b.code === 'active_turns'));
+  ctx.sessionQuery.listSessions = async () => [{ header: { id: 'good' }, live: true }];
+  ctx.sessionQuery.readSession = async () => ({ session, events: [{ type: 'request/header', data: {} }, { type: 'turn/start' }] });
+  failure = await inspect();
+  assert.ok(failure.blockers.some(b => b.code === 'session_inspection_failed'));
+  assert.ok(failure.blockers.some(b => b.code === 'active_turns'));
   delete ctx.sessionQuery;
   assert.ok((await inspect()).blockers.some(b => b.code === 'session_service_missing'));
   const readdirSync = fs.readdirSync;
