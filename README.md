@@ -19,14 +19,14 @@
 - Harness 网页界面；在 dsh-go 中使用时，功能出现在对应网页，不影响 App 原生模型菜单。
 - DSH 安装目录可写，且目标程序文件符合支持的版本与哈希。
 
-**本预览版不会自动打补丁。** 请在网页设置 → 模型分组明确选择安装。安装会校验、备份并修改五个宿主文件，之后须重启引擎。普通卸载插件不会撤销宿主修改。未知版本/文件不强制覆盖。
+**本版本不会自动打补丁。** 请在网页设置 → 模型分组明确选择安装。安装会校验、备份并修改五个宿主文件，之后须重启引擎。普通卸载插件不会撤销宿主修改。未知版本/文件不强制覆盖。
 
 ## 安装
 
 在目标设备的 DSH 环境中执行：
 
 ```bash
-dsh plugin --profile web add https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.5-beta.6/dsh-model-groups-0.3.5-beta.6.tgz
+dsh plugin --profile web add https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.5/dsh-model-groups-0.3.5.tgz
 ```
 
 此包只用于 DSH 0.2.2-rc.1 网页端。安装或更新插件后需重启原引擎使新后端生效，再刷新页面。已有 beta.3～beta.5 的磁盘补丁会保留，不会自动重打或还原。需要新折叠界面时，在模型分组设置页点击“更新多密钥补丁”，完成后重启原引擎并刷新网页；旧补丁可直接更新或还原，不需要先关闭多密钥。未打补丁时仍可使用普通模型；多密钥需在本页安装补丁并再次重启后启用。
@@ -76,7 +76,7 @@ node scripts/doctor.mjs --dsh-root /opt/dsh --json
 
 原文件备份保存在 `DSH_HOME/dsh-model-groups/<安装目录指纹>/backups`，不会随插件包更新丢失。安装意外中断可能留下 `patch.lock`；确认没有安装进程后再处理，不要并发重试。
 
-## 独立补丁管理页（0.3.5-beta.6 预览）
+## 独立补丁管理页（0.3.5）
 
 网页设置 → 模型分组，提供：**启用多密钥 / 关闭多密钥**，以及次要操作 **关闭并卸载插件**。点操作后只确认一次，无需勾选或输入英文。首次安装不会修改宿主，点击刷新也只读检查。详细检查折叠显示，可以复制脱敏诊断。
 

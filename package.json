@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-groups",
-  "version": "0.3.5-beta.6",
+  "version": "0.3.5",
   "description": "DSH 网页模型选择器：供应商与密钥配置分层折叠、多密钥手动选择。支持 DSH 0.2.2-rc.1。",
   "type": "module",
   "license": "MIT",
