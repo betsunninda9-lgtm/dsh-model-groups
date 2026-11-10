@@ -1,6 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
-import { findDshRoot, autoPatch } from './auto-patch.js';
+import { findDshRoot } from './auto-patch.js';
 import { createMaintenance, maintenanceHandler } from './maintenance.js';
 import { createHostInspection } from './maintenance-host.js';
 
@@ -13,15 +13,9 @@ export function apply(ctx) {
   let root;
   try {
     root = findDshRoot();
-    const result = autoPatch(root, home);
     state.error = null;
-    if (result.state === 'restore-pending') {
-      state.restartRequired = true;
-      ctx.logger.warn('已记录恢复原版意图，已禁止自动打补丁。请在维护页完成卸载并重启。');
-    } else if (result.state === 'restart-required') {
-      state.restartRequired = true;
-      ctx.logger.warn(`兼容补丁已安装（${result.changed} 项）；请重启原引擎并刷新网页。`);
-    } else ctx.logger.info('磁盘补丁已就绪；当前进程是否已重新加载仍需重启确认。');
+    state.restartRequired = false;
+    ctx.logger.info('多密钥补丁由设置页手动管理；插件启动不会修改宿主文件。');
   } catch {
     state.error = 'patch-validation-failed';
     ctx.logger.error('多密钥安装校验失败，未强制覆盖未知文件。请查看维护页。');
@@ -29,7 +23,7 @@ export function apply(ctx) {
   ctx.inject(['webServer', 'connection', 'pluginManager'], child => {
     const inspect = root ? createHostInspection(child, root, home) : async () => ({ blockers: [{ code: 'HOST_UNKNOWN', message: '无法验证当前宿主安装，禁止恢复。' }], fingerprint: '' });
     const controller = root ? createMaintenance({ root, home, inspect, manager: child.pluginManager }) : {
-      snapshot: async () => ({ phase: 'failed', restartRequired: false, patches: [], blockers: (await inspect()).blockers, canRestore: false, token: null }),
+      snapshot: async () => ({ phase: 'failed', restartRequired: false, patches: [], blockers: (await inspect()).blockers, canRestore: false, canRestoreOnly: false, canApply: false, token: null }),
       restore: async () => { throw { code: 'HOST_UNKNOWN', message: '无法验证当前宿主安装。' }; },
     };
     child.effect(() => child.webServer.register({ kind: 'exact', path: '/dsh-model-groups/maintenance', handler: maintenanceHandler(controller, child.connection) }));

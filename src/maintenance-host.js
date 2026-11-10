@@ -7,6 +7,10 @@ import { pathToFileURL } from 'node:url';
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const messages = {
   inspection_unknown: '无法完整验证宿主依赖，已停止维护。',
+  config_inspection_failed: '无法完整读取宿主配置，已停止维护。',
+  session_service_missing: '缺少完整会话查询或持久化服务，已停止维护。',
+  session_inspection_failed: '无法完整读取会话依赖，已停止维护。',
+  process_inspection_failed: '无法完整检查引擎进程，已停止维护。',
   profile_unknown: '无法完整读取所有本机配置组合，请先修复配置。',
   cross_profile_bundle: '其他配置仍安装或选择本插件，请先从原配置手动清理。',
   alias_dependency: '仍存在多密钥模型选择依赖，请先手动切换为普通模型。',
@@ -16,42 +20,62 @@ const messages = {
   other_process: '发现其他引擎进程，无法验证它们的活动状态。',
 };
 
-/** Pure scanner: never evaluates configuration expressions or returns inspected values. */
+// These scalar configuration fields cannot supply a plugin, model route or key
+// collection. Unknown fields/roots remain conservative. Never infer safety from
+// expression text, plugin enablement, or a name/id that might itself be dynamic.
+const nonRouteScalars = new Set([
+  'apiKey', 'apiKeyEnv', 'baseURL', 'baseUrl', 'endpoint', 'timeout', 'timeoutMs',
+  'maxRetries', 'temperature', 'topP', 'maxTokens', 'contextWindow',
+  'enabled', 'disabled', 'label', 'description', 'locale', 'language', 'port', 'host',
+]);
+
+/** Pure scanner: never evaluates expressions or returns inspected values. */
 export function dependencySignals(value) {
   const result = { alias: 0, keys: 0, expression: 0 };
-  const walk = input => {
+  const routeCollections = new Set(['providers', 'profiles', 'keyEntries', 'models', 'modelOverrides', 'allowedModels', 'plugins']);
+  const walk = (input, safeScalar = false, field, parentField) => {
     if (typeof input === 'string') { if (input.startsWith('@dsh-key/')) result.alias++; return; }
     if (!input || typeof input !== 'object') return;
-    if (Object.hasOwn(input, '__jsExpr')) result.expression++;
+    if (Object.hasOwn(input, '__jsExpr')) {
+      if (!safeScalar) result.expression++;
+      return;
+    }
     if (!Array.isArray(input)) {
       if (input.multiKey === true || (input.keyEntries && typeof input.keyEntries === 'object' && Object.keys(input.keyEntries).length)) result.keys++;
-      if (Object.hasOwn(input, 'multiKey') && typeof input.multiKey !== 'boolean') result.expression++;
+      if (Object.hasOwn(input, 'multiKey') && typeof input.multiKey !== 'boolean' && !input.multiKey?.__jsExpr) result.expression++;
       if (Object.hasOwn(input, 'keyEntries') && (!input.keyEntries || typeof input.keyEntries !== 'object' || Array.isArray(input.keyEntries))) result.expression++;
     }
-    for (const child of Object.values(input)) walk(child);
+    // Safety applies only to the immediate scalar slot, never a whole subtree.
+    const configFields = field === undefined || field === 'config' || ['value', 'base', 'user'].includes(field) || routeCollections.has(parentField);
+    for (const [key, child] of Object.entries(input)) walk(child,
+      configFields && !Array.isArray(input) && !routeCollections.has(field) && nonRouteScalars.has(key), key, field);
   };
   walk(value);
   return result;
 }
 
-/** Only current route is actionable; historical requests remain valid retained history. */
+/** Fold the current route while retaining request routes reusable by history forks. */
 export function sessionDependencies(events) {
   if (!Array.isArray(events)) throw new Error('Invalid session observation');
-  let selected;
+  let lastUsed, pending;
+  const sameSelection = (a, b) => a && b && a.provider === b.provider && a.model === b.model && a.reasoningEffort === b.reasoningEffort;
   const durable = [];
   let openTurns = 0;
   for (const event of events) {
-    if (event.type === 'model/selection') selected = event.data;
+    if (event.type === 'model/selection') pending = event.data;
     if (event.type === 'request/header') {
-      const route = event.data?.header?.config;
+      const header = event.data?.header, route = header?.config;
       if (!route || typeof route.provider !== 'string' || typeof route.model !== 'string') throw new Error('Invalid route observation');
-      selected = route;
+      lastUsed = { provider: route.provider, model: route.model, reasoningEffort: header.adapterDefaults?.reasoningEffort === true ? undefined : route.reasoningEffort };
+      durable.push(lastUsed);
+      if (sameSelection(pending, lastUsed)) pending = undefined;
     }
     if (event.type === 'subagent/descriptor') durable.push({ provider: event.data?.agentProvider, model: event.data?.agentModel });
+    if (event.type === 'subagent/model-selection-policy') durable.push(event.data?.allowedModels);
     if (event.type === 'turn/start') openTurns++;
     if (event.type === 'turn/end') openTurns = Math.max(0, openTurns - 1);
   }
-  return { routes: [selected, ...durable], openTurns };
+  return { routes: [pending ?? lastUsed, ...durable], openTurns };
 }
 
 /** Read-only inspection bounded to the supplied home and installation. No global-install claim. */
@@ -97,29 +121,37 @@ export function createHostInspection(ctx, root, home) {
       if (!currentFound) block('profile_unknown');
     } catch { block('profile_unknown'); }
     try {
-      for (const { entry, inherited, override } of ctx.configEditor.configuration()) observe([inherited, override, entry.options.config]);
+      for (const { entry, inherited, override } of ctx.configEditor.configuration()) observe({
+        plugin: entry.options.name, config: entry.options.config, base: inherited, user: override,
+      });
       observe(ctx.agentDefaultModel.currentSelection());
       // describe supplies effective values but is intentionally not the full inventory.
-      for (const doc of ctx.settings.describe({ redactSecrets: true })) observe([doc.ns, doc.value, doc.base, doc.user]);
-    } catch { block('inspection_unknown'); }
+      for (const doc of await ctx.settings.describe({ redactSecrets: true })) observe({ ns: doc.ns, value: doc.value, base: doc.base, user: doc.user });
+    } catch { block('config_inspection_failed'); }
     try {
-      if (!ctx.sessionPersistence) throw new Error('Persistence unavailable');
-      const sessions = await ctx.sessionQuery.listSessions();
-      observations.push(digest(sessions));
-      for (const record of sessions) {
-        const loaded = await ctx.sessionQuery.readSession(record.header.id);
-        const state = sessionDependencies(loaded.events);
-        observe(state.routes);
-        observations.push(digest([loaded.session, loaded.events]));
-        // Only live tails indicate current activity; abandoned historical tails do not.
-        if (record.live && state.openTurns) block('active_turns');
+      // sessionQuery can list only live sessions without persistence. That is
+      // insufficient evidence for destructive maintenance of durable routes.
+      if (!ctx.sessionPersistence || typeof ctx.sessionQuery?.listSessions !== 'function' || typeof ctx.sessionQuery?.readSession !== 'function') {
+        block('session_service_missing');
+      } else {
+        const sessions = await ctx.sessionQuery.listSessions();
+        observations.push(digest(sessions));
+        for (const record of sessions) {
+          const loaded = await ctx.sessionQuery.readSession(record.header.id);
+          if (loaded.session?.id !== record.header.id) throw new Error('Invalid session snapshot identity');
+          const state = sessionDependencies(loaded.events);
+          observe(state.routes);
+          observations.push(digest([loaded.session, loaded.events]));
+          // Only live tails indicate current activity; abandoned historical tails do not.
+          if (record.live && state.openTurns) block('active_turns');
+        }
       }
       for (const agent of ctx.agents.list()) {
         observe([agent.options, agent.model.current()]);
         observations.push(digest([agent.id, agent.status, agent.phase?.kind]));
         if (agent.status !== 'idle' || (agent.phase && agent.phase.kind !== 'idle')) block('active_turns');
       }
-    } catch { block('inspection_unknown'); }
+    } catch { block('session_inspection_failed'); }
     // Bounded process observation: no credentials/configuration files are opened.
     // A second Node DSH process is unknown, not presumed inactive. This is not a cross-home lock.
     try {
@@ -137,7 +169,7 @@ export function createHostInspection(ctx, root, home) {
           block('other_process'); observations.push(digest(entry.name));
         }
       }
-    } catch { block('inspection_unknown'); }
+    } catch { block('process_inspection_failed'); }
     const blockers = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([code, count]) => ({ code, message: messages[code], count }));
     return { blockers, fingerprint: digest([observations, blockers]) };
   };

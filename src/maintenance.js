@@ -21,7 +21,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
   const generic = (code, message) => ({ code, message });
   async function assessment() {
     const blockers = [];
-    let plans = [], fingerprint = '';
+    let plans = [], fingerprint = '', removable = false;
     try { plans = patchPlans(); }
     catch { blockers.push(generic('PATCH_CONFLICT', '宿主版本或文件校验不匹配；未修改任何宿主文件，请先处理冲突。')); }
     try {
@@ -33,31 +33,42 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     try {
       const bundles = await manager.listBundles();
       const bundle = bundles.find(item => item.name === BUNDLE_NAME);
-      if (!bundle?.removable) blockers.push(generic('NOT_REMOVABLE', '当前插件不属于可卸载的 profile 依赖，请使用安装它的原 profile 管理器。'));
+      removable = !!bundle?.removable;
+       if (!removable) blockers.push(generic('NOT_REMOVABLE', '当前插件不属于可卸载的 profile 依赖，请使用安装它的原 profile 管理器。'));
     } catch { blockers.push(generic('MANAGER_UNAVAILABLE', '插件管理器不可用，无法安全卸载。')); }
-    return { plans, blockers, stamp: sha256(JSON.stringify([fingerprint, plans.map(p => [p.name, sha256(p.source)])])) };
+    return { plans, blockers, removable, stamp: sha256(JSON.stringify([fingerprint, blockers, removable, plans.map(p => [p.name, sha256(p.source)])])) };
   }
-  function view(report) {
+  function view(report, executing = false) {
+    const valid = report.plans.length > 0 && !report.blockers.some(b => b.code.toLowerCase() === 'patch_conflict');
+    const dependencies = report.blockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
+    // Installation adds supported capabilities, so legacy config dependencies do not
+    // block it. Activity/process uncertainty still requires a maintenance window.
+    const installBlockers = dependencies.filter(b => ['patch_conflict', 'active_turns', 'other_process', 'session_service_missing', 'session_inspection_failed', 'process_inspection_failed', 'inspection_unknown', 'inspection_failed'].includes(b.code.toLowerCase()));
+    const available = (!busy || executing) && phase !== 'removed';
     return { phase, restartRequired, patches: report.plans.map(p => ({ name: p.name, state: p.state })), blockers: report.blockers,
-      token: null, canRestore: !busy && phase !== 'removed' && report.blockers.length === 0,
-      notice: '只还原本插件已知补丁并卸载本插件。密钥、会话历史及安全备份保留；完成后须重启原引擎并刷新页面。失败时保留恢复标记，防止自动重新打补丁。' };
+      token: null, canApply: available && valid && installBlockers.length === 0 && report.plans.some(p => p.state === 'pristine'),
+      canRestoreOnly: available && valid && dependencies.length === 0,
+      canRestore: available && valid && report.blockers.length === 0,
+      notice: '补丁不会自动安装。普通卸载保留宿主修改，升级可能出现兼容问题。移除前须解决旧路由依赖；不会删除凭据或改写历史。' };
   }
   async function snapshot() {
     const report = await assessment();
     const value = view(report);
-    if (value.canRestore) {
-      ticket = { token: crypto.randomBytes(32).toString('hex'), stamp: report.stamp, expires: now() + 120000 };
+    if (value.canRestore || value.canRestoreOnly || value.canApply) {
+      if (!ticket || ticket.stamp !== report.stamp || ticket.expires < now()) ticket = { token: crypto.randomBytes(32).toString('hex'), stamp: report.stamp, expires: now() + 120000 };
       value.token = ticket.token;
     }
     return value;
   }
   async function restore(input) {
     if (busy) throw generic('BUSY', '已有维护任务正在执行。');
-    if (input?.action !== 'restore-and-uninstall' || input?.confirmation !== 'RESTORE AND UNINSTALL' ||
+    if (!['apply', 'restore-only', 'restore-and-uninstall'].includes(input?.action) || input?.confirmation !== 'CONFIRM PATCH OPERATION' ||
       !ticket || typeof input.token !== 'string' || input.token !== ticket.token || ticket.expires < now()) {
       throw generic('CONFIRMATION_REQUIRED', '确认已失效，请重新检查并明确确认。');
     }
-    const expected = ticket; ticket = undefined; busy = true;
+    const expected = ticket; ticket = undefined;
+    const action = input.action;
+    busy = true;
     let locked = false;
     const lock = path.join(storage, 'patch.lock');
     try {
@@ -65,12 +76,27 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       // Same inter-process lock as automatic installation. Never remove somebody else's lock.
       fs.mkdirSync(lock, { mode: 0o700 }); locked = true;
       const report = await assessment();
-      if (report.blockers.length || report.stamp !== expected.stamp) throw generic('STATE_CHANGED', '检查结果发生变化或仍有依赖，请重新检查后处理。');
+      const permissions = view(report, true);
+       const permitted = action === 'apply' ? permissions.canApply : action === 'restore-only' ? permissions.canRestoreOnly : permissions.canRestore;
+       if (!permitted || report.stamp !== expected.stamp) throw generic('STATE_CHANGED', '检查结果发生变化或仍有依赖，请重新检查后处理。');
+      if (action === 'apply') {
+        applyPlan(planPatches(root, 'apply', artifacts), path.join(storage, 'backups'));
+        if (!patchPlans().every(p => p.state === 'patched')) throw generic('VERIFY_FAILED', '补丁验证失败。');
+        // Never delete a computed or unverified path; only this exact owned marker.
+        if (fs.existsSync(marker)) {
+          const stat = fs.lstatSync(marker);
+          if (!stat.isFile() || stat.isSymbolicLink()) throw generic('VERIFY_FAILED', '恢复标记异常。');
+          fs.unlinkSync(marker);
+        }
+        phase = 'applied'; restartRequired = true;
+        return view(await assessment());
+      }
       fs.writeFileSync(marker, JSON.stringify({ version: 1, purpose: 'explicit-restore-and-uninstall' }), { mode: 0o600 });
       // Fresh synchronous planning checks concurrent target edits again; applyPlan performs an additional check.
       applyPlan(patchPlans(), path.join(storage, 'backups'));
       if (!patchPlans().every(p => p.state === 'pristine')) throw generic('VERIFY_FAILED', '原版文件复查失败，未宣告卸载成功。');
       phase = 'restored'; restartRequired = true;
+      if (action === 'restore-only') return view(await assessment());
       phase = 'removing';
       const result = await manager.removeBundle(BUNDLE_NAME);
       if (!result || result.application !== 'applied' || result.error || (result.packageResult && (result.packageResult.exitCode !== 0 || result.packageResult.timedOut))) throw generic('REMOVE_FAILED', '补丁已还原，但插件卸载失败。请保留恢复标记并在插件列表中重试卸载，然后重启。');
@@ -78,7 +104,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       if (remaining?.installed || remaining?.removable || remaining?.enabled) throw generic('REMOVE_UNVERIFIED', '尚未确认插件依赖已移除，请检查插件列表；补丁不会自动重新安装。');
       if (!patchPlans().every(p => p.state === 'pristine')) throw generic('VERIFY_FAILED', '卸载后宿主文件再次变化，不能确认完整恢复。');
       phase = 'removed';
-      return { phase, restartRequired: true, patches: patchPlans().map(p => ({ name: p.name, state: p.state })), blockers: [], canRestore: false, token: null,
+      return { phase, restartRequired: true, patches: patchPlans().map(p => ({ name: p.name, state: p.state })), blockers: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null,
         notice: '已还原原版文件并确认插件依赖移除。请重启原引擎并刷新。密钥、历史和安全备份未删除；其他浏览器的本插件显示偏好可自行清除。' };
     } catch (error) {
       phase = 'failed';

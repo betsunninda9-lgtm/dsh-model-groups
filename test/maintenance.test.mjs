@@ -29,7 +29,7 @@ function fixture(t, overrides = {}) {
   t.after(() => { assert.equal(fs.realpathSync(temp), temp); assert.equal(path.dirname(temp), fs.realpathSync(os.tmpdir())); assert.ok(path.basename(temp).startsWith('dsh-maintenance-test-')); fs.rmSync(temp, { recursive: true }); });
   return { controller, root, home, artifacts, files, manager, calls: () => calls };
 }
-const confirmation = token => ({ action: 'restore-and-uninstall', confirmation: 'RESTORE AND UNINSTALL', token });
+const confirmation = token => ({ action: 'restore-and-uninstall', confirmation: 'CONFIRM PATCH OPERATION', token });
 
 test('confirmed restoration checks all hashes, removes only own bundle and retains suppression marker', async t => {
   const f = fixture(t), before = await f.controller.snapshot();
@@ -94,4 +94,48 @@ test('HTTP owner admission, JSON-only, bounded body and safe errors', async () =
   assert.equal((await request(controller, 'POST', '{')).status, 400);
   assert.equal(calls, 0);
   assert.equal((await request(controller, 'POST', '{}')).body.value.phase, 'removed');
+});
+
+ test('manual apply, restore-only, and reapply retain bundle and use stable tickets', async t => {
+  const f = fixture(t);
+  let state = await f.controller.snapshot();
+  assert.equal(state.canApply, false);
+  assert.equal((await f.controller.snapshot()).token, state.token);
+  await f.controller.restore({action:'restore-only',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
+  assert.equal(f.calls(), 0);
+  state = await f.controller.snapshot();
+  assert.equal(state.canApply, true);
+  const applied = await f.controller.restore({action:'apply',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
+  assert.equal(applied.phase, 'applied');
+  assert.equal(restorationPending(f.root,f.home), false);
+  assert.equal(f.calls(),0);
+  assert.ok(planPatches(f.root,'check',f.artifacts).every(p=>p.state==='patched'));
+ });
+ test('restore-only works without removable bundle, manager removal remains blocked', async t => {
+  const f = fixture(t,{manager:{listBundles:async()=>[]}});
+  const state=await f.controller.snapshot();
+  assert.equal(state.canRestore,false); assert.equal(state.canRestoreOnly,true);
+  await f.controller.restore({action:'restore-only',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
+  assert.ok(planPatches(f.root,'check',f.artifacts).every(p=>p.state==='pristine'));
+ });
+ test('apply rejects active inspection blockers and unknown file states', async t => {
+  const f = fixture(t,{inspect:async()=>({blockers:[{code:'active_turns',message:'stop'}],fingerprint:'x'})});
+  applyPlan(planPatches(f.root,'revert',f.artifacts),path.join(f.home,'isolated-backup'));
+  assert.equal((await f.controller.snapshot()).canApply,false);
+ });
+ test('activation does not invoke automatic patching', async () => {
+  const {apply}=await import('../src/index.js');
+  let injections=0;
+  apply({logger:{info(){},warn(){},error(){}},inject(){injections++;}});
+  assert.equal(injections,1);
+ });
+
+test('real backend snapshots validate frontend after all manual actions', async t => {
+  const {maintenanceSnapshot}=await import('../src/maintenance-state.js');
+  const f=fixture(t);
+  for(const action of ['restore-only','apply','restore-and-uninstall']) {
+    const before=maintenanceSnapshot(await f.controller.snapshot());
+    const result=await f.controller.restore({action,token:before.token,confirmation:'CONFIRM PATCH OPERATION'});
+    assert.doesNotThrow(()=>maintenanceSnapshot(result));
+  }
 });

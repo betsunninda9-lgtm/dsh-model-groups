@@ -12,7 +12,7 @@ test('dependency scanner detects nested disabled configurations without exposing
   assert.equal(dependencySignals({ model: { __jsExpr: 'secret-expression' } }).expression, 1);
 });
 
-test('current session selection overrides historical requests but descriptor remains a dependency', () => {
+test('current selection folds independently while forkable request history and descriptors remain dependencies', () => {
   const events = [
     { type: 'request/header', data: { header: { config: { provider: 'p', model: '@dsh-key/old/m' } } } },
     { type: 'model/selection', data: { provider: 'p', model: 'normal' } },
@@ -20,8 +20,37 @@ test('current session selection overrides historical requests but descriptor rem
   ];
   const state = sessionDependencies(events);
   assert.equal(state.routes[0].model, 'normal');
-  assert.equal(dependencySignals(state.routes).alias, 1);
+  assert.equal(dependencySignals(state.routes).alias, 2);
   assert.throws(() => sessionDependencies([{ type: 'request/header', data: {} }]));
+});
+
+test('95 irrelevant scalar expressions are not blanket blockers; unknown roots and sensitive routes are', () => {
+  const expr = { __jsExpr: 'not evaluated' };
+  const generic = Array.from({ length: 95 }, (_, i) => ({ id: `generic-${i}`, name: 'unrelated-plugin', config: { timeout: expr } }));
+  assert.deepEqual(dependencySignals(generic), { alias: 0, keys: 0, expression: 0 });
+  for (const value of [expr, { name: expr }, { plugin: expr }, { config: expr }, { config: { unknown: expr } },
+    { config: { models: expr } }, { config: { provider: expr } }, { config: { model: expr } },
+    { config: { multiKey: expr } }, { config: { keyEntries: expr } },
+    { config: { providers: { timeout: expr } } }, { config: { models: [expr] } },
+    { config: { timeout: { model: expr } } }]) assert.ok(dependencySignals(value).expression > 0);
+  assert.equal(dependencySignals([...generic, { config: { model: expr } }]).expression, 1);
+  assert.equal(dependencySignals({ config: { timeout: { model: '@dsh-key/k/m' } } }).alias, 1);
+});
+
+test('pending selection survives mismatching headers including effort; only full matching header retires it', () => {
+  const selection = { provider: 'p', model: '@dsh-key/pending/m', reasoningEffort: 'high' };
+  const header = config => ({ type: 'request/header', data: { header: { config } } });
+  const selected = { type: 'model/selection', data: selection };
+  for (const route of [{ provider: 'p', model: 'other' }, { ...selection, reasoningEffort: 'low' }]) {
+    assert.deepEqual(sessionDependencies([selected, header(route)]).routes[0], selection);
+  }
+  const matching = header(selection);
+  assert.equal(sessionDependencies([selected, matching, header({ provider: 'p', model: 'normal' })]).routes[0].model, 'normal');
+  const defaulted = header({ provider: 'p', model: 'normal', reasoningEffort: 'medium' });
+  defaulted.data.header.adapterDefaults = { reasoningEffort: true };
+  assert.equal(sessionDependencies([{ type: 'model/selection', data: { provider: 'p', model: 'normal' } }, defaulted,
+    header({ provider: 'q', model: 'next' })]).routes[0].model, 'next');
+  assert.equal(dependencySignals(sessionDependencies([{ type: 'subagent/model-selection-policy', data: { allowedModels: [{ provider: 'p', model: '@dsh-key/policy/m' }] } }]).routes).alias, 1);
 });
 
 test('inspection reads fixture profiles only and blocks other-profile residuals and live selection', async t => {
@@ -66,7 +95,7 @@ test('inspection reads fixture profiles only and blocks other-profile residuals 
   ctx.agents.list = () => [{ id: 'a', options: {}, model: { current: () => undefined }, status: 'idle', phase: { kind: 'maintenance' } }];
   assert.ok((await inspect()).blockers.some(b => b.code === 'active_turns'));
   delete ctx.sessionPersistence;
-  assert.ok((await inspect()).blockers.some(b => b.code === 'inspection_unknown'));
+  assert.ok((await inspect()).blockers.some(b => b.code === 'session_service_missing'));
   ctx.sessionPersistence = {};
   ctx.agents.list = () => [];
   ctx.sessionQuery.listSessions = async () => [];
@@ -76,4 +105,31 @@ test('inspection reads fixture profiles only and blocks other-profile residuals 
   // A fixture installation has no competing DSH processes; the clean path stays usable.
   assert.deepEqual(clean.blockers, []);
   assert.notEqual(clean.fingerprint, result.fingerprint);
+  // describe may be synchronous (installed API) or asynchronous (host adapters).
+  ctx.settings.describe = async () => Array.from({ length: 95 }, (_, i) => ({ ns: `generic-${i}`, value: { timeout: { __jsExpr: 'opaque' } } }));
+  assert.deepEqual((await inspect()).blockers, []);
+  ctx.settings.describe = async () => [{ ns: 'route', user: { model: { __jsExpr: 'opaque' } } }];
+  assert.ok((await inspect()).blockers.some(b => b.code === 'expression_unknown'));
+  ctx.settings.describe = async () => { throw Error('private settings failure'); };
+  let failure = await inspect();
+  assert.ok(failure.blockers.some(b => b.code === 'config_inspection_failed'));
+  assert.ok(!JSON.stringify(failure).includes('private'));
+  ctx.settings.describe = () => [];
+  ctx.sessionQuery.listSessions = async () => [{ header: { id: 's' }, live: false, persisted: true }];
+  ctx.sessionQuery.readSession = async id => { assert.equal(id, 's'); throw Error('private session failure'); };
+  failure = await inspect();
+  assert.ok(failure.blockers.some(b => b.code === 'session_inspection_failed'));
+  assert.ok(!failure.blockers.some(b => b.code === 'session_service_missing'));
+  delete ctx.sessionQuery;
+  assert.ok((await inspect()).blockers.some(b => b.code === 'session_service_missing'));
+  const readdirSync = fs.readdirSync;
+  try {
+    fs.readdirSync = function (target, ...args) {
+      if (target === '/proc') throw Error('private process failure');
+      return readdirSync.call(this, target, ...args);
+    };
+    failure = await inspect();
+    assert.ok(failure.blockers.some(b => b.code === 'process_inspection_failed'));
+    assert.ok(!JSON.stringify(failure).includes('private'));
+  } finally { fs.readdirSync = readdirSync; }
 });
