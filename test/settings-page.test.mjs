@@ -90,7 +90,11 @@ for (const [name, result] of [
 
 test('blockers and conflicts prevent restore; refresh invalidates confirmation', async () => {
   const app = ui([response(sample({ blockers: [{ code: 'active_turns', message: '/secret/path api-key', count: 2 }] })), response(sample())]);
-  await app.settle(); assert.equal(app.fieldset().props.disabled, true); assert.match(app.text(), /2 项/);
+  await app.settle(); assert.equal(app.fieldset().props.disabled, false); assert.match(app.text(), /2 项/);
+  assert.match(app.text(), /填写确认不会绕过检查/);
+  app.change('checkbox', true); app.change('text', 'RESTORE AND UNINSTALL');
+  assert.equal(app.button('恢复原版并卸载').props.disabled, true);
+  assert.equal(app.calls.length, 1);
   assert.doesNotMatch(app.text(), /api-key|secret\/path/);
   app.click('刷新检查'); await app.settle(); assert.equal(app.fieldset().props.disabled, false);
   assert.equal(app.button('恢复原版并卸载').props.disabled, true); app.dispose();
