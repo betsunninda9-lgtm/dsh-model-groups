@@ -4,6 +4,7 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { planPatches, applyPlan, sha256 } from '../scripts/native-patches.mjs';
+import { restorationPending } from './maintenance.js';
 
 export function findDshRoot(entry = process.argv[1]) {
   if (!entry) throw new Error('无法确定 DSH 进程入口。');
@@ -26,6 +27,7 @@ export function findDshRoot(entry = process.argv[1]) {
 }
 
 export function autoPatch(root, home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')) {
+  if (restorationPending(root, home)) return { state: 'restore-pending', changed: 0, runtimeVerified: false };
   const plans = planPatches(root, 'apply');
   const pending = plans.some(plan => plan.source !== plan.result);
   if (!pending) return { state: 'disk-ready', changed: 0, runtimeVerified: false };
@@ -35,6 +37,7 @@ export function autoPatch(root, home = process.env.DSH_HOME || path.join(os.home
   try { fs.mkdirSync(lock, { mode: 0o700 }); }
   catch { throw new Error('补丁安装已被锁定；可能有另一进程正在安装。确认没有安装任务后再处理锁目录，勿并发重试。'); }
   try {
+    if (restorationPending(root, home)) return { state: 'restore-pending', changed: 0, runtimeVerified: false };
     const changed = applyPlan(planPatches(root, 'apply'), path.join(storage, 'backups'));
     if (!planPatches(root, 'check').every(plan => plan.state === 'patched')) throw new Error('自动补丁复查失败。');
     return { state: changed ? 'restart-required' : 'disk-ready', changed, runtimeVerified: false };

@@ -5,6 +5,10 @@ const inject = ['slots', 'modelDirectories', 'sessions', 'locale', 'remote', 're
 export function apply(ctx) {
   installModelSelectStyles();
   installModelGroupsStyles();
+  installSettingsPageStyles();
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section', id: 'dsh-model-groups', order: 35, label: '模型分组',
+  }, ModelGroupsSettingsPage));
   const providersForm = ctx.configForms?.get('llm-pi-ai');
   let statusDisposed = false;
   let statusNotice;
@@ -14,11 +18,11 @@ export function apply(ctx) {
       if (statusDisposed || (!status.restartRequired && !status.failed)) return;
       statusNotice = document.createElement('div');
       statusNotice.dataset.plugin = 'dsh-model-groups';
-      statusNotice.setAttribute('role', 'alertdialog');
-      statusNotice.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#222);display:grid;place-items:center;padding:24px;box-sizing:border-box;';
+      statusNotice.setAttribute('role', 'status');
+      statusNotice.style.cssText = 'position:fixed;bottom:16px;right:16px;max-width:min(360px,80vw);z-index:1000;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#222);padding:12px;border:1px solid currentColor;border-radius:8px;box-sizing:border-box;pointer-events:none;';
       statusNotice.textContent = status.failed
-        ? '多密钥自动补丁未完成。请回到 App 对话查看引擎日志或运行安装诊断，勿强制覆盖。当前网页暂不可用于编辑模型配置。'
-        : '多密钥补丁已自动安装。请先保存其他页面的草稿，再到 App 重启原引擎并刷新此网页。当前网页暂停操作，避免新旧模块混用。';
+        ? '多密钥自动补丁未完成。请回到 App 对话查看引擎日志或运行安装诊断，勿强制覆盖。请暂勿编辑模型配置；可到「设置 → 模型分组」检查并安全恢复。'
+        : '多密钥补丁已自动安装。请先保存其他页面的草稿，再到 App 重启原引擎并刷新此网页。请暂勿编辑模型配置，避免新旧模块混用；维护入口仍可使用。';
       document.body.appendChild(statusNotice);
     }).catch(() => {});
   ctx.on('dispose', () => { statusDisposed = true; statusNotice?.remove(); });

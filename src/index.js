@@ -1,29 +1,43 @@
+import os from 'node:os';
+import path from 'node:path';
 import { findDshRoot, autoPatch } from './auto-patch.js';
+import { createMaintenance, maintenanceHandler } from './maintenance.js';
+import { createHostInspection } from './maintenance-host.js';
 
-// Explicit patch distribution: installation/loading validates and updates the
-// known DSH disk files. It never forces module reload, restart or config changes.
+// Neither disposal nor ordinary package removal restores patches: HMR and updates
+// also dispose plugins. Only the explicitly confirmed maintenance transaction does.
 export function apply(ctx) {
   const key = Symbol.for('dsh-model-groups.patch-state');
   const state = globalThis[key] ??= { restartRequired: false, error: null };
-  ctx.inject(['webserver'], child => {
-    child.effect(() => child.webserver.register({
-      kind: 'exact', path: '/dsh-model-groups/status',
-      handler(req, res) {
-        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(JSON.stringify({ restartRequired: state.restartRequired, failed: state.error !== null }));
-      },
-    }));
-  });
+  const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+  let root;
   try {
-    const result = autoPatch(findDshRoot());
-    if (result.state === 'restart-required') {
+    root = findDshRoot();
+    const result = autoPatch(root, home);
+    state.error = null;
+    if (result.state === 'restore-pending') {
       state.restartRequired = true;
-      ctx.logger.warn(`多密钥兼容补丁已自动安装（${result.changed} 项）。请保存草稿，在 App 重启原引擎并刷新原网页；当前进程尚未验证生效。`);
-    } else {
-      ctx.logger.info('多密钥磁盘补丁已就绪。若本次进程尚未在打补丁后重启，请重启原引擎并刷新网页。');
-    }
-  } catch (error) {
-    state.error = error.message;
-    ctx.logger.error(`多密钥自动安装未完成：${error.message}。未强制覆盖未知文件，请运行安装诊断；不要把模型分组出现视为多密钥已就绪。`);
+      ctx.logger.warn('已记录恢复原版意图，已禁止自动打补丁。请在维护页完成卸载并重启。');
+    } else if (result.state === 'restart-required') {
+      state.restartRequired = true;
+      ctx.logger.warn(`兼容补丁已安装（${result.changed} 项）；请重启原引擎并刷新网页。`);
+    } else ctx.logger.info('磁盘补丁已就绪；当前进程是否已重新加载仍需重启确认。');
+  } catch {
+    state.error = 'patch-validation-failed';
+    ctx.logger.error('多密钥安装校验失败，未强制覆盖未知文件。请查看维护页。');
   }
+  ctx.inject(['webServer', 'connection', 'pluginManager'], child => {
+    const inspect = root ? createHostInspection(child, root, home) : async () => ({ blockers: [{ code: 'HOST_UNKNOWN', message: '无法验证当前宿主安装，禁止恢复。' }], fingerprint: '' });
+    const controller = root ? createMaintenance({ root, home, inspect, manager: child.pluginManager }) : {
+      snapshot: async () => ({ phase: 'failed', restartRequired: false, patches: [], blockers: (await inspect()).blockers, canRestore: false }),
+      restore: async () => { throw { code: 'HOST_UNKNOWN', message: '无法验证当前宿主安装。' }; },
+    };
+    child.effect(() => child.webServer.register({ kind: 'exact', path: '/dsh-model-groups/maintenance', handler: maintenanceHandler(controller, child.connection) }));
+    child.effect(() => child.webServer.register({ kind: 'exact', path: '/dsh-model-groups/status', handler(req, res) {
+      const admission = child.connection.admit(req);
+      if (!admission?.peer || admission.peer.principal?.kind !== 'owner') { res.writeHead(admission?.rejection || 403); res.end(); return; }
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ restartRequired: state.restartRequired, failed: state.error !== null }));
+    } }));
+  });
 }

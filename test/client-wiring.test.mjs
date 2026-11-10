@@ -34,12 +34,15 @@ test('picker shares native provider config and directory with no separate groupi
   const app = mount();
   const dispose = app.plugin.apply(app.ctx);
   assert.deepEqual(app.formsRequested, ['llm-pi-ai']);
-  assert.equal(app.registrations.length, 1);
-  const picker = app.registrations[0];
+  assert.equal(app.registrations.length, 2);
+  const picker = app.registrations.find(entry => entry.name === 'conversation.input.model');
   assert.equal(picker.name, 'conversation.input.model');
   assert.equal(picker.priority, -10);
   assert.equal(picker.locale, 'model');
-  assert.equal(app.registrations.some(entry => entry.name.includes('settings') || entry.name.endsWith('.label')), false);
+  const settings = app.registrations.find(entry => entry.name === 'settings.section');
+  assert.equal(settings.id, 'dsh-model-groups');
+  assert.equal(settings.label, '模型分组');
+  assert.equal(typeof settings.component, 'function');
   const props = picker.inject('session-a');
   assert.equal(props.directory, app.ctx.modelDirectories.directoryFor().store);
   assert.equal(props.providersForm, app.providersForm);
@@ -57,7 +60,7 @@ test('picker shares native provider config and directory with no separate groupi
 
 test('unavailable subagents never load or change their owner’s model', async () => {
   const app = mount(); app.plugin.apply(app.ctx); app.setAvailable(false);
-  const props = app.registrations[0].inject('subagent-a');
+  const props = app.registrations.find(entry => entry.name === 'conversation.input.model').inject('subagent-a');
   assert.equal(props.available, false); props.load();
   assert.equal(await props.select({ provider: 'route-a', model: 'same-id' }), undefined);
   assert.equal(app.selections.length, 0); assert.equal(app.loads.length, 0);
@@ -66,6 +69,6 @@ test('unavailable subagents never load or change their owner’s model', async (
 test('missing optional forms still leave a model seat available', () => {
   const app = mount(); delete app.ctx.configForms;
   app.plugin.apply(app.ctx);
-  assert.equal(app.registrations.length, 1);
-  assert.equal(app.registrations[0].inject('session-a').providersForm, undefined);
+  assert.equal(app.registrations.length, 2);
+  assert.equal(app.registrations.find(entry => entry.name === 'conversation.input.model').inject('session-a').providersForm, undefined);
 });

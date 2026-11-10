@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-groups",
-  "version": "0.3.4",
+  "version": "0.3.5-beta.1",
   "description": "DSH 网页模型选择器：供应商与密钥配置分层折叠、多密钥手动选择。支持 DSH 0.2.2-rc.1。",
   "type": "module",
   "license": "MIT",
@@ -45,7 +45,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-model-selection",
         "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-settings-models"
+        "@deepseek-ai/dsh-client-ui-settings-models",
+        "@deepseek-ai/dsh-client-ui-settings"
       ],
       "external": [
         "react",

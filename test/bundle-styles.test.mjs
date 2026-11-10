@@ -74,9 +74,9 @@ test('styles survive a dispose/re-apply cycle on a memoized module', () => {
     slots: { inject: () => {}, register: () => {} },
   };
   plugin.apply(ctx);
-  assert.equal(styles.length, 2, 'the first apply installs both stylesheets');
+  assert.equal(styles.length, 3, 'the first apply installs both stylesheets');
   for (const dispose of disposers) dispose();
   assert.equal(styles.length, 0, 'disposal removes the plugin stylesheets');
   plugin.apply(ctx);
-  assert.equal(styles.length, 2, 'a re-applied memoized module restores them');
+  assert.equal(styles.length, 3, 'a re-applied memoized module restores them');
 });
