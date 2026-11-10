@@ -24,6 +24,13 @@ test('current session selection overrides historical requests but descriptor rem
   assert.throws(() => sessionDependencies([{ type: 'request/header', data: {} }]));
 });
 
+test('unmatched request header never hides a pending alias dependency', () => {
+  const pending = { provider: 'p', model: '@dsh-key/key/m', reasoningEffort: 'high' };
+  const header = { type: 'request/header', data: { header: { config: { provider: 'p', model: 'ordinary' } } } };
+  const state = sessionDependencies([{ type: 'model/selection', data: pending }, header]);
+  assert.deepEqual(state.routes[0], pending);
+});
+
 test('inspection reads fixture profiles only and blocks other-profile residuals and live selection', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'model-maintenance-host-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
@@ -51,7 +58,7 @@ test('inspection reads fixture profiles only and blocks other-profile residuals 
     profileContext: { dir: path.join(home, 'profiles/current'), home, overlays: [], installAnchor: path.join(root, 'package.json') },
     configEditor: { configuration: () => [] }, agentDefaultModel: { currentSelection: () => ({ provider: 'p', model: 'normal' }) },
     settings: { describe: () => [] }, sessionPersistence: {}, agents: { list: () => [] },
-    sessionQuery: { listSessions: async () => [{ header: { id: 's' }, live: true }], readSession: async () => ({ session: { id: 's' }, events: [{ type: 'model/selection', data: { model: '@dsh-key/live/m' } }] }) },
+    sessionQuery: { listSessions: async () => [{ header: { id: 's' }, live: true }], readSession: async () => ({ session: { id: 's' }, events: [{ type: 'model/selection', data: { provider: 'p', model: '@dsh-key/live/m' } }] }) },
   };
   const inspect = createHostInspection(ctx, root, home);
   const before = fs.readFileSync(path.join(home, 'profiles/other/patch.json'), 'utf8');

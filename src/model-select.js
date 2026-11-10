@@ -134,7 +134,7 @@ function layoutModelFlyouts(rect, viewportWidth, viewportHeight, count) {
  }));
 }
 
-function ModelSelect({ locked, available, directory, load, select, t, renderSlot, providersForm }) {
+function ModelSelect({ locked, available, directory, load, select, t, renderSlot, providersForm, nativeMetadata }) {
 	const preferences = react.useSyncExternalStore(groupPreferences.subscribe, groupPreferences.getSnapshot);
 	const configuration = react.useSyncExternalStore(listener => providersForm?.subscribe(listener) ?? (() => {}), () => providersForm?.getSnapshot() ?? EMPTY_PROVIDERS_SNAPSHOT);
 	const providers = configuration.status === 'ready' ? (configuration.value?.providers ?? {}) : undefined;
@@ -232,7 +232,12 @@ function ModelSelect({ locked, available, directory, load, select, t, renderSlot
 	}))), [groups]);
 	const showSearch = choices.length > 4;
 	const searching = showSearch && query.trim() !== "";
-	const fullHierarchy = react.useMemo(() => buildModelHierarchy(groups, providers, preferences, state.current), [groups, providers, preferences, state.current]);
+	// Explicit metadata opts into native routes; omitted metadata keeps the alias
+	// compatibility path byte-for-byte in charge of the legacy catalog.
+	const nativeMode = nativeMetadata !== undefined && nativeMetadata !== null;
+	const fullHierarchy = react.useMemo(() => nativeMode
+		? buildNativeHierarchy(groups, nativeMetadata, preferences, state.current)
+		: buildModelHierarchy(groups, providers, preferences, state.current), [groups, providers, preferences, state.current, nativeMetadata, nativeMode]);
 	const displayGroups = react.useMemo(() => filterModelHierarchy(fullHierarchy, showSearch ? query : "", _deepseek_ai_dsh_client_ui_primitives.rankByName), [fullHierarchy, query, showSearch]);
 	const expansionKeys = react.useMemo(() => hierarchyExpansionKeys(fullHierarchy), [fullHierarchy]);
 	const providerCount = fullHierarchy.length;
@@ -539,8 +544,14 @@ function ModelSelect({ locked, available, directory, load, select, t, renderSlot
 		});
 	};
 	const waiting = currentChoice === void 0 && state.status === "loading";
-	const currentKey = decodeKeyModelId(state.current?.model);
-	const currentSource = currentChoice === undefined ? '' : currentKey ? `${currentChoice.group.provider.name} / ${keyEntryName(providers, currentChoice.group.id, currentKey.entryId)}` : currentChoice.group.provider.name;
+	const currentKey = nativeMode ? undefined : decodeKeyModelId(state.current?.model);
+	const nativeRoot = nativeMode ? fullHierarchy.find(entry => entry.kind === 'multi'
+		? entry.children.some(child => child.id === state.current?.provider)
+		: entry.id === state.current?.provider) : undefined;
+	const nativeChild = nativeRoot?.kind === 'multi' ? nativeRoot.children.find(child => child.id === state.current?.provider) : undefined;
+	const currentSource = currentChoice === undefined ? '' : nativeMode
+		? nativeChild ? `${nativeRoot.name} / ${nativeChild.name}` : nativeRoot?.name ?? currentChoice.group.provider.name
+		: currentKey ? `${currentChoice.group.provider.name} / ${keyEntryName(providers, currentChoice.group.id, currentKey.entryId)}` : currentChoice.group.provider.name;
 	const modelLabel = waiting ? t("trigger.loading") : currentChoice === undefined ? t("trigger.fallback") : `${currentChoice.model.name} · ${currentSource}`;
 	const triggerLabel = effortLabel === void 0 ? modelLabel : `${modelLabel} · ${effortLabel}`;
 	const triggerAria = waiting ? t("trigger.loading") : currentChoice === void 0 ? t("trigger.selectAria") : effortLabel === void 0 ? t("trigger.aria", { model: modelLabel }) : t("trigger.ariaEffort", {

@@ -1,6 +1,6 @@
 // Degraded but usable selector: shown only if the grouped picker itself throws.
 // Deliberately primitive-free and flat so it cannot fail the same way.
-function FallbackModelSelect({ available, directory, select, t, providersForm }) {
+function FallbackModelSelect({ available, directory, select, t, providersForm, nativeMetadata }) {
 	const state = (0, react.useSyncExternalStore)((fn) => directory.subscribe(fn), () => directory.getSnapshot());
 	const configuration = react.useSyncExternalStore(fn => providersForm?.subscribe(fn) ?? (() => {}), () => providersForm?.getSnapshot() ?? EMPTY_PROVIDERS_SNAPSHOT);
 	const providers = configuration.status === 'ready' ? (configuration.value?.providers ?? {}) : undefined;
@@ -8,7 +8,19 @@ function FallbackModelSelect({ available, directory, select, t, providersForm })
 	if (!available) return null;
 	const label = typeof t === 'function' ? t('menu.model') : '模型';
 	const current = state.current ?? null;
-	const models = (state.groups ?? []).flatMap(group => {
+	const nativeMode = nativeMetadata !== undefined && nativeMetadata !== null;
+	// Flatten without expansion/filtering: a degraded picker must retain every
+	// directory route, even when metadata is malformed or legacy aliases exist.
+	const models = nativeMode ? buildNativeHierarchy(state.groups ?? [], nativeMetadata, {}, current).flatMap(root => {
+		const groups = root.kind === 'multi' ? root.children : [root.group];
+		return groups.flatMap(group => group.models.map(model => ({
+			provider: group.id,
+			providerName: root.kind === 'multi'
+				? `${root.name} / ${group.name} · ${group.provider?.name ?? group.group?.name ?? group.id} (${group.id})`
+				: `${root.name} (${group.id})`,
+			model,
+		})));
+	}) : (state.groups ?? []).flatMap(group => {
 		const profile = Object.hasOwn(providers ?? {}, group.id) ? providers[group.id] : undefined;
 		const multi = profile?.multiKey === true || (providers === undefined && group.models.some(model => decodeKeyModelId(model.id)));
 		return group.models.flatMap(model => {
@@ -36,7 +48,7 @@ function FallbackModelSelect({ available, directory, select, t, providersForm })
 			'aria-haspopup': 'menu',
 			'aria-expanded': open,
 			onClick: () => setOpen(!open),
-		}, react.createElement('span', { className: 'dsh-mg-triggerLabel' }, active?.model.name ?? current?.model ?? label)),
+		}, react.createElement('span', { className: 'dsh-mg-triggerLabel' }, nativeMode && active ? `${active.model.name ?? active.model.id} · ${active.providerName}` : active?.model.name ?? current?.model ?? label)),
 		open ? react.createElement('div', { className: 'dsh-mg-menu', role: 'menu', style: { left: 12, bottom: 60, top: 'auto' } },
 			models.map((entry) => react.createElement('button', {
 				key: entry.provider + '/' + entry.model.id,

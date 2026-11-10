@@ -31,7 +31,7 @@ export function apply(ctx) {
   };
   window.addEventListener('storage', onStorage);
   ctx.on('dispose', () => {
-    window.removeEventListener('storage', event => onStorage(event));
+    window.removeEventListener('storage', onStorage);
     document.querySelectorAll('style[data-plugin="dsh-model-groups"]').forEach(style => style.remove());
   });
   return ctx.slots.inject('conversation.input.model', () => ctx.slots.register({

@@ -37,21 +37,27 @@ export function dependencySignals(value) {
 /** Only current route is actionable; historical requests remain valid retained history. */
 export function sessionDependencies(events) {
   if (!Array.isArray(events)) throw new Error('Invalid session observation');
-  let selected;
+  let pending = null, lastUsed = null;
+  const sameSelection = (a, b) => a !== null && b !== null && a.provider === b.provider && a.model === b.model && a.reasoningEffort === b.reasoningEffort;
   const durable = [];
   let openTurns = 0;
   for (const event of events) {
-    if (event.type === 'model/selection') selected = event.data;
+    if (event.type === 'model/selection') {
+      if (!event.data || typeof event.data.provider !== 'string' || typeof event.data.model !== 'string') throw new Error('Invalid selection observation');
+      pending = event.data;
+    }
     if (event.type === 'request/header') {
-      const route = event.data?.header?.config;
+      const header = event.data?.header;
+      const route = header?.config;
       if (!route || typeof route.provider !== 'string' || typeof route.model !== 'string') throw new Error('Invalid route observation');
-      selected = route;
+      lastUsed = { provider: route.provider, model: route.model, ...(header.adapterDefaults?.reasoningEffort === true || route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }) };
+      if (sameSelection(pending, lastUsed)) pending = null;
     }
     if (event.type === 'subagent/descriptor') durable.push({ provider: event.data?.agentProvider, model: event.data?.agentModel });
     if (event.type === 'turn/start') openTurns++;
     if (event.type === 'turn/end') openTurns = Math.max(0, openTurns - 1);
   }
-  return { routes: [selected, ...durable], openTurns };
+  return { routes: [pending ?? lastUsed, ...durable], openTurns };
 }
 
 /** Read-only inspection bounded to the supplied home and installation. No global-install claim. */
