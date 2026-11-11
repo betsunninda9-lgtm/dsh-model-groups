@@ -27,21 +27,27 @@
 
 ### 1. 安装插件
 
-当前正式版为 **0.3.6**。GitHub Release 附件已发布并通过实际安装验证；本次 npm 发布被 registry 的认证/权限错误拒绝，核验时 npm `latest` 仍为 `0.3.5`。**目前更新到本版请使用下方 GitHub 正式附件，不要用 npm `@latest` 替代。**
+当前正式版为 **0.3.6**。npm 与 GitHub Release 均已发布并分别验证，npm `latest` 已指向 `0.3.6`；两个渠道的正式归档逐字节一致。npm 精确版本、GitHub 正式附件和市场列出的 GitHub 默认分支来源均已通过实际安装验证。
 
-在 DSH 运行环境中执行：
+在 DSH 运行环境中指定正式版本安装（若原 profile 不是 `web`，替换为原 profile 名）：
+
+```bash
+dsh plugin --profile web add dsh-model-groups@0.3.6 --registry=https://registry.npmjs.org/
+```
+
+也可以使用同一正式版的 GitHub 固定附件：
 
 ```bash
 dsh plugin --profile web add https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.6/dsh-model-groups-0.3.6.tgz
 ```
 
-也可以使用市场列出的 GitHub 默认分支来源（已验证安装为 `0.3.6`）：
+市场列出的 GitHub 默认分支来源（本次已验证安装为 `0.3.6`）：
 
 ```bash
 dsh plugin --profile web add github:betsunninda9-lgtm/dsh-model-groups
 ```
 
-> npm 恢复发布后，可在确认 registry 已提供目标版本时改用 `dsh plugin --profile web add dsh-model-groups@0.3.6`。npm 与 GitHub 的发布状态分别核验，不将一个渠道的成功视为另一个已同步。
+> **刚发版时不要只看 `@latest`。** pnpm 的 `minimumReleaseAge` 观察期可能暂时让标签安装选中旧版，本机实测曾选到 `0.3.4`，不代表 npm 没有发布。需要立即使用已核验的本版时，明确指定 `@0.3.6`（pnpm 可能为该精确版本记录例外，严格策略也可能要求确认），或使用上面的固定 GitHub 附件；不要关闭全局供应链策略，也不要先卸载。镜像 registry 也可能同步较慢，上面的 npm 命令明确使用官方 registry。
 
 安装完成后，**重启原 DSH 引擎并刷新网页**，使插件加载生效。
 
@@ -93,9 +99,9 @@ dsh plugin --profile web add github:betsunninda9-lgtm/dsh-model-groups
 
 ## 更新
 
-1. 在原 profile 执行安装命令更新插件包（当前 npm 尚未发布 `0.3.6`，使用已验证的 GitHub 正式附件）：
+1. 在原 profile 指定正式版本更新插件包（或使用上面的固定 GitHub 附件，不必先卸载）：
    ```bash
-   dsh plugin --profile web add https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.6/dsh-model-groups-0.3.6.tgz
+   dsh plugin --profile web add dsh-model-groups@0.3.6 --registry=https://registry.npmjs.org/
    ```
 2. 更新插件包后，先 **重启原 DSH 引擎并刷新网页**。
 3. 打开 **设置 → 模型分组** 查看补丁状态：
@@ -117,7 +123,7 @@ dsh plugin --profile web add github:betsunninda9-lgtm/dsh-model-groups
 
 旧版中有自动应用补丁的版本（也包括 `0.3.5-beta.1`～`beta.3`）；最新版加载插件**不会自动改宿主**。即使安装器热重载了插件，或页面显示磁盘文件齐全，也不能证明旧进程已加载新宿主模块，仍应按上述顺序重启原引擎和刷新原网页。
 
-从 GitHub 测试分支安装的用户，请在**原 profile** 执行上面的 GitHub 正式附件命令切回正式渠道，再按本节复查；已验证从测试分支原地替换为正式附件可保留同一插件依赖、注册及数据。分支来源不会因正式发版或删除测试分支自动迁移。若实际使用的 profile 不是 `web`，请使用原 profile 名，不另建一份插件。
+从 GitHub 测试分支安装的用户，请在**原 profile** 执行上面的 npm 精确版本或 GitHub 正式附件命令切回正式渠道，再按本节复查；已验证从测试分支原地替换为正式附件，以及旧版原地替换为 npm `0.3.6`，均可保留同一插件依赖、注册及数据。分支来源不会因正式发版或删除测试分支自动迁移。若实际使用的 profile 不是 `web`，请使用原 profile 名，不另建一份插件。
 
 若更新后仍有冲突：先复制脱敏诊断，保留现场；**不要先卸载、还原补丁、删除配置或重建密钥**。需要适配时，只提供详情标记的程序文件，不提供凭据、配置或聊天记录。旧配置未填写分组协议时继续跟随供应商；显式切换协议也不保证上游一定返回缓存命中，缓存统计以实际 API usage 为准。
 
