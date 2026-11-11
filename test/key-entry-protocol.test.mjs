@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sha256, transformSource } from '../scripts/native-patches.mjs';
 import { buildProtocolArtifact, protocolReplacements } from '../scripts/pi-ai-protocol.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const artifact = JSON.parse(fs.readFileSync(path.join(root, 'native/pi-ai.patch.json'), 'utf8'));
 const previous = JSON.parse(fs.readFileSync(path.join(root, 'test/fixtures/pi-ai/v0.3.5.json'), 'utf8'));
+const cancellationDelta = JSON.parse(fs.readFileSync(path.join(root, 'test/fixtures/pi-ai/credential-cancellation.delta.json'), 'utf8'));
 const revisions = value => [value, ...(value.variants ?? []).map(variant => ({ ...value, ...variant, current: variant.current === true }))];
 const current = revisions(artifact).filter(revision => revision.current === true);
 
@@ -32,6 +33,14 @@ for (const file of candidates) {
   const pristine = hash === revision.baseSha256 ? source : transformSource(source, revision, true);
   assert.equal(sha256(pristine), revision.baseSha256);
   bases.set(revision.baseSha256, pristine);
+}
+// This tiny fixture is the COMPLETE pristine delta measured from the uploaded
+// program, not a guessed cancellation implementation. Its exact hash is checked.
+if (bases.has(cancellationDelta.baseSha256)) {
+  const reconstructed = transformSource(bases.get(cancellationDelta.baseSha256), cancellationDelta);
+  const supplied = bases.get(cancellationDelta.resultSha256);
+  if (supplied !== undefined) assert.equal(reconstructed, supplied, 'fixture must equal the complete uploaded pristine program');
+  bases.set(cancellationDelta.resultSha256, reconstructed);
 }
 const dependencyPath = path.join(dshRoot, 'package.json');
 const require = fs.existsSync(dependencyPath) ? createRequire(dependencyPath) : undefined;
@@ -83,7 +92,7 @@ function runtime(source) {
     },
   });
   const body = source.replace(/^import .*;\n/gm, '').replace(/^export \{[^\n]+\};?\s*$/m, '');
-  const module = new Function(...Object.keys(deps), `${body}\nreturn { Config, keyEntryProfile, PiAiAdapter, resolveProfiles, supportedProtocols, discoverModels, registrationFacts, keyModelId, catalogProvider, validKeyEntryId, LlmError };`)(...Object.values(deps));
+  const module = new Function(...Object.keys(deps), `${body}\nreturn { Config, keyEntryProfile, PiAiAdapter, resolveProfiles, supportedProtocols, discoverModels, registrationFacts, keyModelId, catalogProvider, validKeyEntryId, credentialStoreFrom, LlmError };`)(...Object.values(deps));
   const start = source.indexOf('const storedDiscoveryProfile =');
   const end = source.indexOf('\n\tctx.llm.registerModelDiscovery', start);
   assert.ok(start > 0 && end > start);
@@ -122,7 +131,10 @@ test('every released pi-ai revision keeps its exact hashes and original reversib
     assert.notEqual(retained.current, true);
   }
   assert.equal(new Set(current.map(value => value.baseSha256)).size, current.length);
-  assert.equal(current.length, 2, 'only two bases have verified source bytes; no fabricated third hash');
+  assert.equal(current.length, 3, 'all three current hashes come from verified real program bytes');
+  const third = current.find(value => value.baseSha256 === cancellationDelta.resultSha256);
+  assert.equal(third?.resultSha256, 'e999e1a7f2352177c653ff0cea6485c3b1d1ea95b40ea613fc0549e2c8e49662');
+  assert.ok(revisions(previous).some(value => value.resultSha256 === cancellationDelta.legacyResultSha256));
   for (const revision of current) assert.deepEqual(revision.replacements.slice(-protocolReplacements().length), protocolReplacements());
 });
 
@@ -284,3 +296,173 @@ for (const revision of current) {
     assert.equal(beforeFacts[0].keyEntries.find(value => value.id === 'overridden').api, 'anthropic-messages');
   });
 }
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(fulfill => { resolve = fulfill; });
+  return { promise, resolve };
+}
+
+// Only this record-service boundary is fake: it matches modifyRecord's
+// undefined-means-no-change behavior and never touches real credentials/files.
+function memoryRecords(hooks = {}) {
+  const records = new Map();
+  let tail = Promise.resolve(), writes = 0, mutations = 0;
+  const credentials = {
+    readRecord: async key => records.get(key),
+    listRecords: async () => [...records].map(([key, record]) => ({ key, kind: record.kind })),
+    deleteRecord: async key => { records.delete(key); },
+    modifyRecord(key, mutate) {
+      mutations++;
+      const pending = tail.then(async () => {
+        await hooks.beforeMutate?.();
+        const next = await mutate(records.get(key));
+        if (next !== undefined) {
+          await hooks.beforeCommit?.();
+          records.set(key, next);
+          writes++;
+        }
+        return records.get(key);
+      });
+      tail = pending.catch(() => {});
+      return pending;
+    },
+  };
+  return { credentials, drain: () => tail, get writes() { return writes; }, get mutations() { return mutations; } };
+}
+
+const thirdPristine = bases.get(cancellationDelta.resultSha256);
+const thirdCurrent = current.find(value => value.baseSha256 === cancellationDelta.resultSha256);
+const thirdLegacy = revisions(previous).find(value => value.resultSha256 === cancellationDelta.legacyResultSha256);
+const cancellationPrograms = thirdPristine && require ? [
+  ['uploaded legacy', transformSource(thirdPristine, thirdLegacy)],
+  ['new per-entry protocol', transformSource(thirdPristine, thirdCurrent)],
+] : [];
+const cancellationSkip = cancellationPrograms.length === 0 && 'Supply the real credential-cancellation build or its hash-verified primary delta';
+
+function credentialFixture(source, hooks) {
+  const module = runtime(source);
+  const records = memoryRecords(hooks);
+  const store = module.credentialStoreFrom({ get: name => name === 'credentials' ? records.credentials : undefined });
+  return { module, records, store };
+}
+
+test('third build preserves legacy credential reads, writes, no-change, list and delete', { skip: cancellationSkip }, async () => {
+  for (const [, source] of cancellationPrograms) {
+    const { module, records, store } = credentialFixture(source);
+    const credential = { type: 'api_key', key: 'synthetic-key-not-a-secret' };
+    assert.equal(await store.read('gateway'), undefined);
+    assert.deepEqual(await store.modify('gateway', async current => { assert.equal(current, undefined); return credential; }), credential);
+    assert.deepEqual(await store.read('gateway'), credential);
+    assert.deepEqual(await store.modify('gateway', async () => undefined), credential);
+    assert.equal(records.writes, 1, 'undefined mutation must not delete/overwrite the record');
+    assert.deepEqual(await store.list(), [{ providerId: 'gateway', type: 'api_key' }]);
+    await assert.rejects(store.modify('Invalid/route', async () => credential), error => error instanceof module.LlmError && error.code === 'UNSTORABLE_PROVIDER_ID');
+    await store.delete('gateway');
+    assert.equal(await store.read('gateway'), undefined);
+    assert.deepEqual(await store.list(), []);
+  }
+});
+
+test('third build cancels pre-aborted and queued credential mutations before calling mutate', { skip: cancellationSkip }, async () => {
+  for (const [, source] of cancellationPrograms) for (const queued of [false, true]) {
+    const entered = deferred(), release = deferred();
+    const { records, store } = credentialFixture(source, queued ? { beforeMutate: async () => { entered.resolve(); await release.promise; } } : {});
+    const controller = new AbortController(), reason = new Error('synthetic cancellation');
+    let mutations = 0;
+    if (!queued) controller.abort(reason);
+    const pending = store.modify('gateway', async () => { mutations++; return { type: 'api_key', key: 'must-not-save' }; }, { signal: controller.signal });
+    const rejected = assert.rejects(pending, error => error === reason);
+    if (queued) {
+      await entered.promise;
+      controller.abort(reason);
+      release.resolve();
+    }
+    await rejected;
+    assert.equal(mutations, 0);
+    assert.equal(records.writes, 0);
+    assert.equal(await store.read('gateway'), undefined);
+  }
+});
+
+test('third build does not discard a credential mutation already started when its caller aborts', { skip: cancellationSkip }, async () => {
+  for (const [, source] of cancellationPrograms) {
+    const { records, store } = credentialFixture(source);
+    const started = deferred(), release = deferred(), controller = new AbortController();
+    const credential = { type: 'oauth', access: 'synthetic-rotated-access', refresh: 'synthetic-rotated-refresh', expires: 9999999999999 };
+    const pending = store.modify('gateway', async () => { started.resolve(); await release.promise; return credential; }, { signal: controller.signal });
+    await started.promise;
+    controller.abort(new Error('caller left after refresh started'));
+    release.resolve();
+    assert.deepEqual(await pending, credential);
+    assert.deepEqual(await store.read('gateway'), credential);
+    assert.equal(records.writes, 1);
+  }
+});
+
+test('real pi-ai Models.login keeps before/during/queued/started cancellation semantics on both third builds', { skip: cancellationSkip, timeout: 10000 }, async () => {
+  const { createModels } = await import(pathToFileURL(path.join(dshRoot, 'node_modules/@earendil-works/pi-ai/dist/models.js')).href);
+  for (const [, source] of cancellationPrograms) for (const phase of ['before-login', 'during-login', 'queued-persistence', 'started-persistence']) {
+    const entered = deferred(), release = deferred(), controller = new AbortController();
+    const reason = new Error(`synthetic cancellation ${phase}`);
+    const credential = { type: 'api_key', key: 'synthetic-login-result' };
+    const hooks = phase === 'queued-persistence' ? { beforeMutate: async () => { entered.resolve(); await release.promise; } }
+      : phase === 'started-persistence' ? { beforeCommit: async () => { entered.resolve(); await release.promise; } } : {};
+    const { records, store } = credentialFixture(source, hooks);
+    const models = createModels({ credentials: store });
+    let logins = 0;
+    models.setProvider({ id: 'gateway', name: 'Offline fixture', getModels: () => [], auth: { apiKey: { login: async interaction => {
+      logins++;
+      assert.equal(interaction.signal, controller.signal);
+      if (phase === 'during-login') { entered.resolve(); await release.promise; }
+      return credential;
+    } } } });
+    if (phase === 'before-login') controller.abort(reason);
+    const pending = models.login('gateway', 'api_key', { signal: controller.signal });
+    const completed = phase === 'started-persistence' ? pending : assert.rejects(pending, error => error === reason);
+    if (phase !== 'before-login') {
+      await entered.promise;
+      controller.abort(reason);
+      release.resolve();
+    }
+    if (phase === 'started-persistence') assert.deepEqual(await completed, credential);
+    else await completed;
+    await records.drain();
+    assert.equal(logins, phase === 'before-login' ? 0 : 1);
+    assert.equal(records.writes, phase === 'started-persistence' ? 1 : 0, phase);
+    assert.equal(records.mutations, ['before-login', 'during-login'].includes(phase) ? 0 : 1);
+    assert.deepEqual(await store.read('gateway'), phase === 'started-persistence' ? credential : undefined);
+  }
+});
+
+test('real pi-ai OAuth refresh cancels queued work but persists rotated tokens once started', { skip: cancellationSkip, timeout: 10000 }, async () => {
+  const { refreshStoredOAuthCredential } = await import(pathToFileURL(path.join(dshRoot, 'node_modules/@earendil-works/pi-ai/dist/auth/resolve.js')).href);
+  for (const [, source] of cancellationPrograms) for (const queued of [true, false]) {
+    const entered = deferred(), release = deferred(), controller = new AbortController();
+    let hold = false, refreshes = 0;
+    const { records, store } = credentialFixture(source, { beforeMutate: async () => { if (hold && queued) { entered.resolve(); await release.promise; } } });
+    const old = { type: 'oauth', access: 'synthetic-expired', refresh: 'synthetic-old-refresh', expires: 1 };
+    const rotated = { type: 'oauth', access: 'synthetic-new', refresh: 'synthetic-new-refresh', expires: 9999999999999 };
+    await store.modify('gateway', async () => old);
+    hold = true;
+    const pending = refreshStoredOAuthCredential(store, 'gateway', { refresh: async (current, signal) => {
+      assert.deepEqual(current, old);
+      assert.notEqual(signal, controller.signal, 'active refresh uses its own timeout, not caller cancellation');
+      refreshes++;
+      entered.resolve();
+      await release.promise;
+      assert.equal(signal.aborted, false);
+      return rotated;
+    } }, () => true, controller.signal);
+    const reason = new Error('synthetic refresh caller abort');
+    const completed = queued ? assert.rejects(pending, error => error === reason) : pending;
+    await entered.promise;
+    controller.abort(reason);
+    release.resolve();
+    if (queued) await completed;
+    else assert.deepEqual(await completed, rotated);
+    assert.equal(refreshes, queued ? 0 : 1);
+    assert.equal(records.writes, queued ? 1 : 2);
+    assert.deepEqual(await store.read('gateway'), queued ? old : rotated);
+  }
+});

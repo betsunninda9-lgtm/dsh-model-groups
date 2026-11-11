@@ -481,6 +481,12 @@
       "baseSha256": "1a3ae58f9b4493e15459cc5000ec80f21b5d3f4a9dea6ffb6bc28e5b8817ae8a",
       "resultSha256": "9ca2b07c19694a4521a29c82b7948fb6326d80ee7741200a1d7b0f3f06e1da19",
       "current": true
+    },
+    {
+      "source": "0.2.2-rc.1 with tool lookup optimization and credential cancellation with per-entry API overrides",
+      "baseSha256": "0a99a2fc903a4285044b09114b3bd20ee1e612f39aa381e4a71b10d48ee9e9f7",
+      "resultSha256": "e999e1a7f2352177c653ff0cea6485c3b1d1ea95b40ea613fc0549e2c8e49662",
+      "current": true
     }
   ],
   "replacements": [
