@@ -44,7 +44,10 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
   async function assessment() {
     const blockers = [];
     let plans = [], removable = false;
-    try { plans = patchPlans(); }
+    try {
+      plans = patchPlans();
+      if (plans.some(plan => plan.applySupported === false)) blockers.push(generic('UNSUPPORTED_PATCH_BUILD', '此宿主构建仅能识别旧补丁，尚无经过验证的新版协议补丁；不会执行不完整更新。仍可关闭或卸载。'));
+    }
     catch { blockers.push(generic('PATCH_CONFLICT', '宿主版本或文件校验不匹配；未修改任何宿主文件，请先处理冲突。')); }
     try {
       const report = await inspect();
@@ -60,20 +63,21 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     // Dependency observations describe consequences, not permission to overwrite files.
     // Only proven activity, other engines sharing the installation and file conflicts
     // stop patch changes. Unknown observations remain visible for explicit consent.
-    const hardCodes = new Set(['patch_conflict', 'active_turns', 'other_process', 'not_removable', 'manager_unavailable']);
+    const hardCodes = new Set(['patch_conflict', 'unsupported_patch_build', 'active_turns', 'other_process', 'not_removable', 'manager_unavailable']);
     const warnings = blockers.filter(b => !hardCodes.has(b.code.toLowerCase()));
     const hard = blockers.filter(b => hardCodes.has(b.code.toLowerCase()));
-    return { plans, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([hard, removable, plans.map(p => [p.name, sha256(p.source), !!p.updateAvailable, sha256(JSON.stringify(p.artifact))])])) };
+    return { plans, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([hard, removable, plans.map(p => [p.name, sha256(p.source), !!p.updateAvailable, p.applySupported, sha256(JSON.stringify(p.artifact))])])) };
   }
   function view(report, executing = false) {
     const valid = report.plans.length > 0 && !report.blockers.some(b => b.code.toLowerCase() === 'patch_conflict');
-    const dependencies = report.blockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
-    const installBlockers = dependencies;
+    const restoreBlockers = report.blockers.filter(b => b.code.toLowerCase() !== 'unsupported_patch_build');
+    const dependencies = restoreBlockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
+    const installBlockers = report.blockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
     const available = (!busy || executing) && phase !== 'removed';
-    return { phase, restartRequired: restartRequired(), patches: report.plans.map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable })), blockers: report.blockers, warnings: report.warnings,
+    return { phase, restartRequired: restartRequired(), patches: report.plans.map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })), blockers: report.blockers, warnings: report.warnings,
       token: null, canApply: available && valid && installBlockers.length === 0 && report.plans.some(p => p.state === 'pristine' || p.updateAvailable),
       canRestoreOnly: available && valid && dependencies.length === 0 && report.plans.some(p => p.state === 'patched'),
-      canRestore: available && valid && report.blockers.length === 0,
+      canRestore: available && valid && restoreBlockers.length === 0,
       notice: '关闭会保留密钥和聊天记录，不自动更换服务。旧多密钥选择可能失效，旧配置可能影响重启；使用情况未完整检查时仍可确认继续。普通插件列表卸载不会还原补丁。' };
   }
   async function snapshot() {
@@ -106,7 +110,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
        if (!permitted || report.stamp !== expected.stamp) throw generic('STATE_CHANGED', '文件或任务状态发生变化，请确认没有任务运行后重试。');
       if (action === 'apply') {
         changeFiles(planPatches(root, 'apply', artifacts));
-        if (!patchPlans().every(p => p.state === 'patched' && !p.updateAvailable)) throw generic('VERIFY_FAILED', '补丁验证失败。');
+        if (!patchPlans().every(p => p.state === 'patched' && !p.updateAvailable && p.applySupported !== false)) throw generic('VERIFY_FAILED', '补丁验证失败。');
         // Never delete a computed or unverified path; only this exact owned marker.
         if (fs.existsSync(marker)) {
           const stat = fs.lstatSync(marker);
@@ -129,7 +133,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       if (remaining?.installed || remaining?.removable || remaining?.enabled) throw generic('REMOVE_UNVERIFIED', '尚未确认插件依赖已移除，请检查插件列表；补丁不会自动重新安装。');
       if (!patchPlans().every(p => p.state === 'pristine')) throw generic('VERIFY_FAILED', '卸载后宿主文件再次变化，不能确认完整恢复。');
       phase = 'removed';
-      return { phase, restartRequired: restartRequired(), patches: patchPlans().map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable })), blockers: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null,
+      return { phase, restartRequired: restartRequired(), patches: patchPlans().map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })), blockers: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null,
         notice: '已确认原版文件和插件依赖移除状态。密钥、历史和安全备份未删除；运行时状态未验证，是否需要重启以本进程实际文件修改记录为准。' };
     } catch (error) {
       phase = 'failed';

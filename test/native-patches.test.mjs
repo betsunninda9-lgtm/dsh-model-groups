@@ -57,6 +57,52 @@ test('recognized legacy patched revision upgrades directly and both revisions re
   assert.equal(fs.readFileSync(item.file, 'utf8'), item.source);
 });
 
+test('per-base current revisions upgrade official and alternate legacy builds instead of remaining silently stale', t => {
+  const f = fixture(t), item = f.files[0], legacy = item.artifact;
+  const alternateBase = 'alternate-pristine', alternateOld = 'alternate-old', alternateNew = 'alternate-new';
+  const current = { baseSha256: sha256(alternateBase), resultSha256: sha256(alternateNew), replacements: [{ before: alternateBase, after: alternateNew }], current: true };
+  const old = { baseSha256: sha256(alternateBase), resultSha256: sha256(alternateOld), replacements: [{ before: alternateBase, after: alternateOld }] };
+  const manifest = { ...legacy, current: true, variants: [current, old] };
+  fs.writeFileSync(path.join(f.artifacts, item.name), JSON.stringify(manifest));
+  for (const observed of [alternateBase, alternateOld]) {
+    fs.writeFileSync(item.file, observed);
+    assert.equal(planPatches(f.root, 'check', f.artifacts)[0].updateAvailable, observed === alternateOld);
+    assert.equal(planPatches(f.root, 'apply', f.artifacts)[0].result, alternateNew);
+    applyPlan(planPatches(f.root, 'apply', f.artifacts), path.join(f.root, 'alternate-backups'));
+    assert.equal(planPatches(f.root, 'check', f.artifacts)[0].updateAvailable, false);
+    assert.equal(planPatches(f.root, 'revert', f.artifacts)[0].result, alternateBase);
+  }
+  // Inheriting primary.current would falsely mark the old revision as current.
+  fs.writeFileSync(item.file, alternateOld);
+  assert.equal(planPatches(f.root, 'apply', f.artifacts)[0].result, alternateNew);
+  fs.writeFileSync(path.join(f.artifacts, item.name), JSON.stringify({ ...manifest, variants: [current, { ...old, current: true }] }));
+  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /Ambiguous current patch variant/);
+  assert.equal(fs.readFileSync(item.file, 'utf8'), alternateOld);
+  fs.writeFileSync(path.join(f.artifacts, item.name), JSON.stringify({ ...manifest, current: 'true' }));
+  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /Invalid current patch marker/);
+});
+
+test('required current revision blocks the whole apply for legacy-only builds, but check/revert remain available', t => {
+  const f = fixture(t), item = f.files[0], legacy = item.artifact;
+  const primary = { ...legacy, baseSha256: sha256('supported-pristine'), resultSha256: sha256('supported-latest'),
+    replacements: [{ before: 'supported-pristine', after: 'supported-latest' }], current: true, requiresCurrent: true,
+    variants: [{ baseSha256: legacy.baseSha256, resultSha256: legacy.resultSha256, replacements: legacy.replacements }] };
+  fs.writeFileSync(path.join(f.artifacts, item.name), JSON.stringify(primary));
+  for (const state of [item.source, 'after-0']) {
+    fs.writeFileSync(item.file, state);
+    assert.equal(planPatches(f.root, 'check', f.artifacts)[0].applySupported, false);
+    assert.equal(planPatches(f.root, 'revert', f.artifacts)[0].result, item.source);
+    const before = f.files.map(entry => fs.readFileSync(entry.file, 'utf8'));
+    assert.throws(() => applyPlan(planPatches(f.root, 'apply', f.artifacts), path.join(f.root, 'never-created')), /No verified current patch/);
+    assert.equal(fs.existsSync(path.join(f.root, 'never-created')), false);
+    assert.deepEqual(f.files.map(entry => fs.readFileSync(entry.file, 'utf8')), before);
+  }
+  fs.writeFileSync(item.file, 'supported-pristine');
+  assert.equal(planPatches(f.root, 'apply', f.artifacts)[0].result, 'supported-latest');
+  fs.writeFileSync(path.join(f.artifacts, item.name), JSON.stringify({ ...primary, requiresCurrent: 'true' }));
+  assert.throws(() => planPatches(f.root, 'check', f.artifacts), /Invalid required-current patch marker/);
+});
+
 test('legacy revision metadata must match exact reversible source and unknown edits remain untouched', t => {
   const f = fixture(t), item = f.files[0], legacy = item.artifact;
   const manifest = { ...legacy, resultSha256: sha256('new-code'), replacements: [{ before: item.source, after: 'new-code' }], variants: [{ ...legacy, replacements: [{ before: item.source, after: 'wrong-code' }] }] };

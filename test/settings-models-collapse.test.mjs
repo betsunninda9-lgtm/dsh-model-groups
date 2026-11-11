@@ -24,17 +24,19 @@ function harness() {
     },
   };
   const jsx = (type, props, key) => ({ type, props, key });
-  const start = source.indexOf('const MULTI_KEY_ENTRY_ID');
+  const start = source.indexOf('const MULTI_KEY_PROTOCOLS');
   const end = source.indexOf('\t\t//#endregion', start);
-  const context = vm.createContext({ react, react_jsx_runtime: { jsx, jsxs: jsx }, ModelsSection_module_css_default: {},
-    _deepseek_ai_dsh_client_ui_primitives: {}, crypto: { randomUUID: () => 'fixture' }, structuredClone,
+  const context = vm.createContext({ react, react_jsx_runtime: { jsx, jsxs: jsx },
+    ModelsSection_module_css_default: Object.fromEntries(['input', 'selectInput', 'dangerButton', 'deleteConfirm', 'field', 'fieldLabel', 'rowCard', 'rowHead', 'rowActions', 'advancedHint'].map(key => [key, 'native-' + key])),
+    _deepseek_ai_dsh_client_ui_primitives: { Modal: function Modal() {}, Button: function Button() {} }, crypto: { randomUUID: () => 'fixture' }, structuredClone,
+    protocolLabel: (t, value) => 'protocol:' + value,
     apiKeyFailure: value => /\n/.test(value) ? 'badKey' : undefined,
     modelDrafts: value => Array.isArray(value) ? value : [],
     validateDeepSeekModels: models => models.some(m => !m.id) ? { index: 0, key: 'badModel' } : undefined,
     validateReasoningEfforts: () => undefined,
     ApiKeyInput: function ApiKeyInput() {}, ModelListEditor: function ModelListEditor() {},
   });
-  vm.runInContext(source.slice(start, end) + '\nthis.Editor = MultiKeyEntriesEditor;this.dirty = multiKeyEntryDirty;this.store = storeMultiKeyDrafts;', context);
+  vm.runInContext(source.slice(start, end) + '\nthis.Editor = MultiKeyEntriesEditor;this.dirty = multiKeyEntryDirty;this.store = storeMultiKeyDrafts;this.normalize = normalizedMultiKeyEntries;this.validate = multiKeyFailure;this.createEntry = newMultiKeyEntry;', context);
   return { context, render(props) {
     let tree, rounds = 0;
     do { pending = false; cursor = 0; effects = []; tree = context.Editor(props); for (const fn of effects) fn(); if (++rounds > 20) throw new Error('Hook render loop'); } while (pending);
@@ -60,7 +62,11 @@ function props() {
 }
 
 test('generated shipped settings patch is hash locked, current and reversible in memory', () => {
-  assert.equal(artifact.variants.length, 1);
+  assert.equal(artifact.variants.length, 2);
+  assert.equal(artifact.current, true);
+  const stable = JSON.parse(fs.readFileSync(new URL('fixtures/settings-models/v0.3.5.json', import.meta.url), 'utf8'));
+  assert.deepEqual(artifact.variants[0].replacements, stable.replacements);
+  assert.equal(artifact.variants[0].resultSha256, stable.resultSha256);
   // Full-host hash/reversibility is additionally checked by the shipped native
   // test with explicit DSH_ROOT; this suite has no installed-host dependency.
   assert.equal(artifact.baseSha256, artifact.variants[0].baseSha256);
@@ -69,8 +75,8 @@ test('generated shipped settings patch is hash locked, current and reversible in
   new vm.Script(source);
   for (const version of ['beta3', 'beta4', 'beta5']) {
     const old = JSON.parse(fs.readFileSync(new URL(`fixtures/settings-models/${version}.json`, import.meta.url), 'utf8'));
-    assert.equal(old.resultSha256, artifact.variants[0].resultSha256);
-    assert.deepEqual(old.replacements, artifact.variants[0].replacements);
+    assert.equal(old.resultSha256, artifact.variants[1].resultSha256);
+    assert.deepEqual(old.replacements, artifact.variants[1].replacements);
   }
 });
 
@@ -83,7 +89,7 @@ test('saved defaults collapsed; key controls stay visible and masked by original
   assert.equal(details.props.style.display, 'none');
   assert.ok(get(card(tree), node => node.type?.name === 'ApiKeyInput'));
   assert.ok(model(tree), 'model editor remains mounted while hidden');
-  assert.ok(get(details, node => node.props?.children === 'multiKeyRemove'));
+  assert.ok(get(details, node => node.props?.children === 'multiKeyRemoveGroup'));
   assert.equal(toggle(tree).props['aria-controls'], details.props.id);
   get(tree, node => node.type === 'button' && node.props.children === 'multiKeyAdd').props.onClick();
   tree = h.render(p);
@@ -176,9 +182,104 @@ test('owner outcome wiring preserves create close and reports normalized save sn
   assert.match(provider, /if \(!multiKey\) props\.onClose\(true\)/);
   for (const code of [custom, provider]) {
     assert.match(code, /saveState: entrySaveState/);
+    assert.match(code, /entries: keyEntries, protocols,/);
     assert.match(code, /catch \{[\s\S]*setEntrySaveState\(\{ ok: false/);
     assert.match(code, /saving\.current = false/);
     assert.match(code, /storeMultiKeyDrafts\(operations,/);
+  }
+});
+
+const selector = tree => get(card(tree), node => node.props?.['data-key-entry-protocol'] === 'one');
+const removeButton = tree => get(card(tree), node => node.props?.['data-key-entry-remove'] === 'one');
+const removeDialog = tree => get(tree, node => node.props?.['data-key-entry-remove-dialog']);
+const dialogAction = (tree, text) => get(removeDialog(tree).props.footer, node => node.props?.children === text);
+
+test('all three entry protocols and inheritance reach stored-key and draft-key model probes without changing IDs', () => {
+  const protocols = ['openai-completions', 'openai-responses', 'anthropic-messages'];
+  for (const stored of [true, false]) {
+    const h = harness(), p = props();
+    p.protocols = protocols; p.probe.api = 'openai-completions';
+    if (!stored) { p.persistedEntries = {}; p.keyDrafts.one = 'test-only-draft-key'; }
+    let tree = h.render(p);
+    const options = flatten(selector(tree)).filter(node => node.type === 'option').map(node => node.props.value);
+    assert.deepEqual(options, ['', ...protocols]);
+    assert.equal(selector(tree).props.className, 'native-input native-selectInput');
+    for (const value of protocols) {
+      selector(tree).props.onChange({ target: { value } }); tree = h.render(p);
+      assert.equal(p.entries.one.api, value);
+      assert.equal(model(tree).props.probe.api, value);
+      assert.equal(model(tree).props.probe.keyEntryId, stored ? 'one' : undefined);
+      assert.equal(model(tree).props.probe.apiKey, stored ? undefined : 'test-only-draft-key');
+      assert.equal(p.entries.one.apiKeyEnv, 'P_MULTKEY_ONE_API_KEY');
+      assert.equal(p.entries.one.models[0].id, 'm');
+    }
+    selector(tree).props.onChange({ target: { value: '' } }); tree = h.render(p);
+    assert.equal(Object.hasOwn(p.entries.one, 'api'), false);
+    assert.equal(model(tree).props.probe.api, p.probe.api);
+    const before = p.entries;
+    selector(tree).props.onChange({ target: { value: 'guessed-model-protocol' } });
+    assert.equal(p.entries, before, 'unknown protocols are not accepted from a synthetic event');
+    p.disabled = true; tree = h.render(p);
+    assert.equal(selector(tree).props.disabled, true);
+    selector(tree).props.onChange({ target: { value: 'anthropic-messages' } });
+    assert.equal(p.entries, before);
+  }
+});
+
+test('entry normalization preserves explicit protocols and unknown fields while inheritance is omitted; validation rejects unsupported values', () => {
+  const h = harness(), p = props();
+  for (const api of [undefined, '', 'openai-completions', 'openai-responses', 'anthropic-messages']) {
+    const entry = { ...p.entries.one, api, extension: 'retained' };
+    const normalized = h.context.normalize('p', { one: entry }).one;
+    assert.equal(normalized.extension, 'retained');
+    assert.equal(Object.hasOwn(normalized, 'api'), api !== undefined && api !== '');
+    if (api) assert.equal(normalized.api, api);
+  }
+  for (const api of ['chat', 'messages', null, 42]) {
+    assert.equal(h.context.validate('p', { one: { ...p.entries.one, api } }, {}, {}, key => key), 'multiKeyInvalidProtocol');
+  }
+  const [, created] = h.context.createEntry('p', { name: 'Copied', api: 'openai-responses', models: [] });
+  assert.equal(created.api, 'openai-responses');
+});
+
+test('destructive group action uses always-red native class and requires cancelable native confirmation before touching only its draft', () => {
+  const h = harness(), p = props();
+  p.entries.two = { name: 'Other', apiKeyEnv: 'P_MULTKEY_TWO_API_KEY', models: [{ id: 'other' }] };
+  p.keyDrafts = { one: 'draft-one', two: 'draft-two' }; p.confirmations = { one: true, two: true };
+  let tree = h.render(p);
+  assert.equal(removeButton(tree).props.className, 'native-dangerButton');
+  assert.equal(removeButton(tree).props.children, 'multiKeyRemoveGroup');
+  const original = structuredClone(p.entries);
+  removeButton(tree).props.onClick(); tree = h.render(p);
+  assert.equal(removeDialog(tree).type.name, 'Modal');
+  assert.equal(removeDialog(tree).props.open, true);
+  assert.deepEqual(p.entries, original, 'opening confirmation never removes anything');
+  assert.equal(dialogAction(tree, 'multiKeyRemoveGroup').props.className, 'native-deleteConfirm');
+  assert.equal(dialogAction(tree, 'cancel').props['data-modal-autofocus'], true);
+  dialogAction(tree, 'cancel').props.onClick(); tree = h.render(p);
+  assert.equal(removeDialog(tree).props.open, false);
+  assert.deepEqual(p.entries, original);
+  removeButton(tree).props.onClick(); tree = h.render(p);
+  dialogAction(tree, 'multiKeyRemoveGroup').props.onClick(); tree = h.render(p);
+  assert.deepEqual(Object.keys(p.entries), ['two']);
+  assert.equal(p.entries.two.name, 'Other');
+  assert.deepEqual(Object.keys(p.keyDrafts), ['two']);
+  assert.deepEqual(Object.keys(p.confirmations), ['two']);
+  assert.equal(p.persistedEntries.one.name, 'Saved key', 'persisted settings remain unchanged until Apply');
+  assert.equal(removeDialog(tree).props.open, false);
+});
+
+test('disabled, busy and externally removed targets close confirmation and cannot remove an unrelated group', () => {
+  for (const change of ['disabled', 'busy', 'external']) {
+    const h = harness(), p = props(); let tree = h.render(p);
+    removeButton(tree).props.onClick(); tree = h.render(p);
+    if (change === 'disabled') p.disabled = true;
+    if (change === 'busy') model(tree).props.onBusyChange(true);
+    if (change === 'external') { p.entries = { two: { name: 'Other', models: [{ id: 'other' }] } }; }
+    tree = h.render(p);
+    assert.equal(removeDialog(tree).props.open, false);
+    dialogAction(tree, 'multiKeyRemoveGroup').props.onClick(); tree = h.render(p);
+    assert.deepEqual(Object.keys(p.entries), [change === 'external' ? 'two' : 'one']);
   }
 });
 

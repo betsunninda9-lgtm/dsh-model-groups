@@ -14,14 +14,15 @@ export function maintenanceSnapshot(value) {
     || !(value.warnings == null || (Array.isArray(value.warnings) && value.warnings.every(warning => warning && typeof warning.code === 'string'
       && (warning.count == null || (Number.isSafeInteger(warning.count) && warning.count > 0)))))
     || !value.patches.every(patch => patch && ['patched', 'pristine', 'conflict'].includes(patch.state)
-      && (patch.updateAvailable == null || typeof patch.updateAvailable === 'boolean'))
+      && (patch.updateAvailable == null || typeof patch.updateAvailable === 'boolean')
+      && (patch.applySupported == null || typeof patch.applySupported === 'boolean'))
     || !value.blockers.every(blocker => blocker && typeof blocker.code === 'string' && typeof blocker.message === 'string'
       && (blocker.count == null || (Number.isSafeInteger(blocker.count) && blocker.count > 0)))) {
     throw new Error('Invalid maintenance snapshot');
   }
   return { phase: value.phase, restartRequired: value.restartRequired, canApply: value.canApply,
     canRestoreOnly: value.canRestoreOnly, canRestore: value.canRestore,
-    token: value.token ?? null, patches: value.patches.map(patch => ({ state: patch.state, updateAvailable: patch.updateAvailable === true })),
+    token: value.token ?? null, patches: value.patches.map(patch => ({ state: patch.state, updateAvailable: patch.updateAvailable === true, applySupported: patch.applySupported !== false })),
     blockers: value.blockers.map(blocker => ({ code: blocker.code, count: blocker.count ?? null })),
     warnings: (value.warnings ?? []).map(warning => ({ code: warning.code, count: warning.count ?? null })) };
 }
@@ -29,7 +30,8 @@ export function maintenanceCanAction(snapshot, action) {
   const capability = Object.hasOwn(ACTION_CAPABILITIES, action) ? ACTION_CAPABILITIES[action] : null;
   return !!capability && !!snapshot && ['idle', 'applied', 'restored', 'failed'].includes(snapshot.phase) && snapshot[capability]
     && typeof snapshot.token === 'string' && snapshot.token.length > 0
-    && !snapshot.patches.some(patch => patch.state === 'conflict');
+    && !snapshot.patches.some(patch => patch.state === 'conflict')
+    && (action !== 'apply' || !snapshot.patches.some(patch => patch.applySupported === false));
 }
 export function maintenanceCanRestore(snapshot) { return maintenanceCanAction(snapshot, 'restore-and-uninstall'); }
 export function maintenanceBlockerText(blocker) {
@@ -37,6 +39,7 @@ export function maintenanceBlockerText(blocker) {
     active_sessions: '存在正在运行的会话，请先停止运行中的任务。',
     active_turns: '存在正在运行的回合，请先等待结束或停止。',
     patch_conflict: '补丁状态冲突，请先人工诊断，不会强制覆盖。',
+    unsupported_patch_build: '此宿主构建尚无经过验证的新版协议补丁，已阻止不完整更新；仍可关闭或卸载，不会改动密钥。',
     backup_missing: '缺少可验证的原版备份，无法安全恢复。',
     restart_required: '需要重启原引擎后重新检查。',
     inspection_failed: '状态检查失败，请使用安装诊断排查。',
@@ -74,7 +77,7 @@ export function maintenanceBlockerText(blocker) {
 // Copy only allowlisted codes and enumerated state: unknown codes may contain secrets or paths.
 export function maintenanceDiagnostic(state) {
   const snapshot = state.snapshot;
-  const knownCodes = new Set(['active_sessions', 'active_turns', 'patch_conflict', 'backup_missing', 'restart_required',
+  const knownCodes = new Set(['active_sessions', 'active_turns', 'patch_conflict', 'unsupported_patch_build', 'backup_missing', 'restart_required',
     'inspection_failed', 'config_inspection_failed', 'session_inspection_failed', 'session_service_missing',
     'process_inspection_failed', 'profile_inspection_failed', 'patch_inspection_failed', 'default_inspection_failed',
     'agent_inspection_failed', 'activity_unverified', 'not_removable', 'not_applicable', 'manager_unavailable',

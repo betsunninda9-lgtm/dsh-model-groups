@@ -116,6 +116,31 @@ test('recognized legacy patch can update through backend and frontend snapshots'
   await f.controller.restore({ ...confirmation(closeState.token), action: 'restore-only' });
   assert.equal(fs.readFileSync(f.files[1], 'utf8'), 'before-1');
 });
+test('legacy-only protocol build blocks update without blocking check, restore or uninstall and invalidates old apply consent', async t => {
+  const f = fixture(t), manifest = path.join(f.artifacts, ARTIFACTS[0]);
+  const old = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  const supported = { ...old, current: true, requiresCurrent: true, resultSha256: sha256('new-backend'), replacements: [{ before: 'before-0', after: 'new-backend' }],
+    variants: [{ baseSha256: old.baseSha256, resultSha256: old.resultSha256, replacements: old.replacements }] };
+  fs.writeFileSync(manifest, JSON.stringify(supported));
+  const consent = await f.controller.snapshot(); assert.equal(consent.canApply, true);
+  fs.writeFileSync(manifest, JSON.stringify({ ...supported, baseSha256: sha256('unsupported-other-base'), resultSha256: sha256('unsupported-other-result'),
+    replacements: [{ before: 'unsupported-other-base', after: 'unsupported-other-result' }] }));
+  const before = f.files.map(file => fs.readFileSync(file, 'utf8'));
+  await assert.rejects(f.controller.restore({ ...confirmation(consent.token), action: 'apply' }), { code: 'STATE_CHANGED' });
+  const { maintenanceSnapshot, maintenanceCanAction, maintenanceBlockerText, maintenanceDiagnostic } = await import('../src/maintenance-state.js');
+  const state = maintenanceSnapshot(await f.controller.snapshot());
+  assert.equal(state.canApply, false); assert.equal(state.canRestoreOnly, true); assert.equal(state.canRestore, true);
+  assert.equal(state.patches[0].applySupported, false);
+  assert.equal(maintenanceCanAction({ ...state, canApply: true }, 'apply'), false);
+  assert.match(maintenanceBlockerText(state.blockers[0]), /不完整更新/);
+  assert.match(maintenanceDiagnostic({ snapshot: state }), /unsupported_patch_build/);
+  assert.deepEqual(f.files.map(file => fs.readFileSync(file, 'utf8')), before);
+  await f.controller.restore({ ...confirmation(state.token), action: 'restore-only' });
+  const pristine = maintenanceSnapshot(await f.controller.snapshot());
+  assert.equal(pristine.canApply, false); assert.equal(pristine.canRestoreOnly, false); assert.equal(pristine.canRestore, true);
+  assert.equal((await f.controller.restore(confirmation(pristine.token))).phase, 'removed');
+});
+
 test('advisory fingerprint changes do not require extra confirmation or block restore', async t => {
   let fingerprint = 'one';
   const f = fixture(t, { inspect: async () => ({ blockers: [], fingerprint }) });

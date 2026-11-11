@@ -46,7 +46,17 @@ export function planPatches(dshRoot, mode = 'check', artifactDirectory = path.jo
     const hash = sha256(source);
     const primary = artifact;
     if (artifact.variants !== undefined && (!Array.isArray(artifact.variants) || artifact.variants.some(variant => !/^[0-9a-f]{64}$/.test(variant.baseSha256) || !/^[0-9a-f]{64}$/.test(variant.resultSha256) || (variant.replacements !== undefined && !Array.isArray(variant.replacements))))) throw new Error('Invalid patch variants');
-    const candidates = [primary, ...(primary.variants || []).map(variant => ({ ...primary, ...variant }))];
+    if (primary.current !== undefined && typeof primary.current !== 'boolean' || primary.variants?.some(variant => variant.current !== undefined && typeof variant.current !== 'boolean')) throw new Error('Invalid current patch marker');
+    if (primary.requiresCurrent !== undefined && typeof primary.requiresCurrent !== 'boolean') throw new Error('Invalid required-current patch marker');
+    // current belongs to a revision, not the shared package metadata. Do not
+    // inherit primary.current onto legacy revisions when merging their fields.
+    const candidates = [primary, ...(primary.variants || []).map(variant => ({ ...primary, ...variant, current: variant.current === true }))];
+    const currentByBase = new Map();
+    for (const candidate of candidates) {
+      if (candidate.current !== true) continue;
+      if (currentByBase.has(candidate.baseSha256)) throw new Error('Ambiguous current patch variant');
+      currentByBase.set(candidate.baseSha256, candidate);
+    }
     // A shared pristine base is intentional for legacy revisions. Prefer current
     // output, but never guess between two different recognized patched sources.
     const patchedMatches = candidates.filter(candidate => hash === candidate.resultSha256);
@@ -58,11 +68,15 @@ export function planPatches(dshRoot, mode = 'check', artifactDirectory = path.jo
     // Verify the observed revision bidirectionally, including check/no-op plans.
     const observedPatched = transformSource(original, artifact);
     if (state === 'patched' && observedPatched !== source) throw new Error('Patch roundtrip mismatch');
-    const targetArtifact = artifact.baseSha256 === primary.baseSha256 ? primary : artifact;
+    const applySupported = primary.requiresCurrent !== true || currentByBase.has(artifact.baseSha256);
+    // A recognized old revision can still be checked/restored. It cannot be
+    // silently left behind while dependent UI/schema files upgrade around it.
+    if (mode === 'apply' && !applySupported) throw new Error('No verified current patch for this native build; no files written');
+    const targetArtifact = currentByBase.get(artifact.baseSha256) ?? (artifact.baseSha256 === primary.baseSha256 ? primary : artifact);
     const latest = transformSource(original, targetArtifact);
     const updateAvailable = state === 'patched' && sha256(latest) !== hash;
     const result = mode === 'apply' ? latest : mode === 'revert' ? original : source;
-    return { name, artifact, file, source, result, state, updateAvailable, mode: fs.statSync(file).mode & 0o777 };
+    return { name, artifact, file, source, result, state, updateAvailable, applySupported, mode: fs.statSync(file).mode & 0o777 };
   });
 }
 
@@ -138,7 +152,7 @@ function main(args) {
   if (args.some(arg => !allowed.has(arg))) throw new Error('Unknown argument');
   const mode = (modes[0] ?? '--check').slice(2);
   const plans = planPatches(args[i + 1], mode);
-  for (const plan of plans) console.log(`${plan.artifact.target}: ${plan.state}`);
+  for (const plan of plans) console.log(`${plan.artifact.target}: ${plan.state}${plan.applySupported ? plan.updateAvailable ? ' (update available)' : '' : ' (recognized legacy build; no verified upgrade, apply disabled)'}`);
   if (mode !== 'check') console.log(`${applyPlan(plans)} native files changed. Restart the existing DSH service and refresh its page; the live process is not reloaded by this script.`);
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

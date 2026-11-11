@@ -192,12 +192,28 @@ test('patched updates survive sanitization and show an actionable update button'
   await app.settle();
   assert.equal(app.button('更新多密钥补丁').props.disabled, false);
   assert.match(app.text(), /更新可用/);
+  assert.match(app.text(), /新版更新待确认/);
+  assert.doesNotMatch(app.text(), /多密钥已启用（磁盘状态）/);
   assert.equal(app.button('启用多密钥'), undefined);
   app.click('更新多密钥补丁'); app.click('确认执行'); await app.settle();
   assert.equal(JSON.parse(app.calls[2][1].body).action, 'apply');
   assert.match(app.text(), /需要重启原引擎/); app.dispose();
   assert.throws(() => maintenanceSnapshot(sample({ patches: [{ state: 'patched', updateAvailable: 'yes' }] })));
 });
+test('legacy-only build disables apply but keeps close/uninstall and shows only a fixed unsupported-build explanation', async () => {
+  const initial = sample({ canApply: true, patches: [{ state: 'patched', updateAvailable: true, applySupported: false }],
+    blockers: [{ code: 'UNSUPPORTED_PATCH_BUILD', message: 'secret backend /path' }] });
+  const app = ui([response(initial)]); await app.settle();
+  assert.equal(app.button('更新多密钥补丁').props.disabled, true);
+  assert.equal(app.button('关闭多密钥').props.disabled, false);
+  assert.equal(app.button('关闭并卸载插件').props.disabled, false);
+  assert.match(app.text(), /此构建不支持新版协议补丁|此构建不支持新版补丁/);
+  assert.match(app.text(), /阻止不完整更新/);
+  assert.doesNotMatch(app.text(), /多密钥已启用（磁盘状态）|secret backend|\/path/);
+  app.dispose();
+  assert.throws(() => maintenanceSnapshot(sample({ patches: [{ state: 'patched', applySupported: 'yes' }] })));
+});
+
 test('snapshot warnings are optional and invalid warnings fail closed', () => {
   assert.deepEqual(maintenanceSnapshot(sample()).warnings, []);
   assert.throws(() => maintenanceSnapshot(sample({ warnings: 'invalid' })));

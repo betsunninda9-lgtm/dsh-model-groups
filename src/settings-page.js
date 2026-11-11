@@ -10,7 +10,9 @@ export function ModelGroupsSettingsPage() {
   const phaseLabels = { idle: '检查完成，可选择操作', applied: '多密钥已应用（磁盘状态）', restored: '多密钥已关闭，插件仍保留（磁盘状态）', removing: '正在卸载，尚未确认完成', removed: '已确认关闭多密钥并卸载插件', failed: '维护失败，未确认完成' };
   const updatesAvailable = snapshot?.patches.some(patch => patch.updateAvailable) ?? false;
   const statusLabel = snapshot?.phase === 'idle'
-    ? snapshot.patches.length && snapshot.patches.every(patch => patch.state === 'patched') ? '多密钥已启用（磁盘状态）'
+    ? snapshot.patches.some(patch => patch.applySupported === false) ? '旧补丁已识别，但此构建不支持新版协议补丁'
+      : updatesAvailable ? '旧多密钥补丁已应用，新版更新待确认'
+      : snapshot.patches.length && snapshot.patches.every(patch => patch.state === 'patched') ? '多密钥已启用（磁盘状态）'
       : snapshot.patches.length && snapshot.patches.every(patch => patch.state === 'pristine') ? '多密钥已关闭（磁盘状态）' : '磁盘状态待处理，请查看操作限制'
     : phaseLabels[snapshot?.phase];
   const patchLabels = { patched: '已应用', pristine: '原版', conflict: '冲突（不会强制覆盖）' };
@@ -50,7 +52,7 @@ export function ModelGroupsSettingsPage() {
       h('summary', null, '检查详情与脱敏诊断'),
       h('p', null, '这里只验证磁盘和安全权限，运行时是否已切换未知。每次确认后会重新检查；状态变化需重新确认。未知文件不会强制覆盖，检查不完整仅提醒；操作仍以各自安全权限为准。'),
       snapshot?.warnings.length > 0 && h('ul', null, ...snapshot.warnings.map((warning, index) => h('li', { key: index }, maintenanceWarningText(warning)))),
-      snapshot && h('ul', null, ...snapshot.patches.map((patch, index) => h('li', { key: index }, `宿主文件 ${index + 1}：${patchLabels[patch.state]}${patch.updateAvailable ? '（更新可用）' : ''}`))),
+      snapshot && h('ul', null, ...snapshot.patches.map((patch, index) => h('li', { key: index }, `宿主文件 ${index + 1}：${patchLabels[patch.state]}${patch.applySupported === false ? '（此构建不支持新版补丁）' : patch.updateAvailable ? '（更新可用）' : ''}`))),
       h('button', { type: 'button', onClick: copy }, '复制脱敏诊断'),
       h('p', { role: 'status' }, copyStatus)));
 }

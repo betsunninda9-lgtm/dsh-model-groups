@@ -1,6 +1,32 @@
 # DSH Model Groups
 
-为 DeepSeek Harness 网页端提供分层模型菜单与多密钥管理。同一供应商共用 Provider ID、API 地址和协议，各配置分别设置名称、密钥与模型列表。
+为 DeepSeek Harness 网页端提供分层模型菜单与多密钥管理。同一供应商共用 Provider ID 和 API 地址，各密钥分组可分别设置名称、密钥、模型列表与 API 协议；未单独选择时继承供应商协议。
+
+## 0.3.6-beta.1 测试分支
+
+此分支仅用于 **DSH 0.2.2-rc.1 网页端**，不是 dsh-go 原生界面插件；不改变 npm `latest` 或市场正式版。包名仍为 `dsh-model-groups`，在原插件上更新，不需要删除配置或先卸载。
+
+- 分组可选 **跟随供应商 / OpenAI Chat Completions / OpenAI Responses / Anthropic Messages**。保存、实际模型请求及“获取模型”都使用该分组有效协议；不按 Claude/GPT 等名字强制切换。
+- 展开详情使用宿主原生字段、下拉框、间距与主题色。已保存分组默认折叠，新建/错误分组展开；折叠保留输入草稿。
+- 删除动作位于详情底部，红色 **“移除此密钥分组”** 按钮，带宿主原生确认弹窗。只在点击“应用”后保存，不删除已存凭据或自动切换会话；它不是“移除单个模型”。
+- 支持从 0.3.5 和 beta.3～beta.5 已知补丁原地更新。更新前先保存其他编辑、停止运行任务；未知文件仍拒绝覆盖。
+
+从此 GitHub 分支安装（会联网下载，首次可稍慢）：
+
+```bash
+dsh plugin --profile web add github:betsunninda9-lgtm/dsh-model-groups#feature/key-entry-protocol-beta
+```
+
+也可安装本次提供的 `dsh-model-groups-0.3.6-beta.1.tgz` 测试包。**只更新插件包不会自动更新宿主补丁**：
+
+1. 安装后重启原 DSH 引擎，让维护后端载入新的补丁清单，刷新原网页。
+2. 打开 **设置 → 模型分组 → 更新多密钥补丁**，检查并确认。不要点“关闭并卸载插件”，不用关闭现有多密钥分组。
+3. 因本次同时更新后端协议 schema/runtime，完成后按提示重启同一个引擎并刷新原页面。仅前端 built bundle 的变化通常可被宿主监听，但本次不能只靠刷新代替后端重载。
+4. 在 **设置 → 模型 → 编辑供应商 → 展开密钥分组详情** 检查新协议框与红色按钮。默认继承，不改原有密钥、Provider ID、分组 ID、模型别名和会话选择。
+
+Anthropic Messages 能保留供应商返回的原生缓存用量信息，但**不保证缓存命中**：中转站仍须支持该协议和真实缓存统计；选择 Chat 也是合法配置，插件不会伪造命中数。
+
+当前 pi-ai 的主安装版本与官方 npm 构建均验证了协议补丁升级；极少见的旧 credential-cancellation 构建仍只支持识别和还原原补丁，**会在任何文件写入前阻止整批升级**，不会让新界面搭配旧后端。遇到该构建请先核对程序版本，不能据此声称全部构建均已适配。
 
 ## 功能
 
@@ -21,7 +47,7 @@
 
 **本版本不会自动打补丁。** 请在网页设置 → 模型分组明确选择安装。安装会校验、备份并修改五个宿主文件，之后须重启引擎。普通卸载插件不会撤销宿主修改。未知版本/文件不强制覆盖。
 
-## 安装
+## 正式版安装（0.3.5，非本分支测试版）
 
 在目标设备的 DSH 环境中执行：
 
@@ -34,8 +60,8 @@ dsh plugin --profile web add https://github.com/betsunninda9-lgtm/dsh-model-grou
 ## 使用
 
 1. 打开 **设置 → 模型**，新增或编辑自定义模型 API。
-2. 填写供应商公共的 Provider ID、API 地址和协议。
-3. 开启 **多密钥配置**，为每份配置填写名称、密钥和模型列表，点击“应用”。
+2. 填写供应商公共的 Provider ID、API 地址和默认协议。
+3. 开启 **多密钥配置**，为每份配置填写名称、密钥和模型列表；展开详情可单独选择协议，留作“跟随供应商”则与旧版行为一致。点击“应用”保存。
 4. 在会话模型菜单中展开供应商和配置，选择需要的模型。
 
 ```text
@@ -118,7 +144,17 @@ npm test
 npm run check:build
 ```
 
-设置 `DSH_ROOT` 可启用依赖对应 DSH 程序文件的回归测试。源码包含层级、选择器交互、面板布局及补丁安装与恢复测试。
+设置 `DSH_ROOT` 可启用依赖对应 DSH 程序文件的只读回归测试；真实安装/更新/还原集成测试仅在临时副本中写入，配置和凭据使用合成哨兵。源码包含层级、选择器交互、协议探测、删除确认、面板布局及补丁安装与恢复测试。
+
+宿主设置页属于 `@deepseek-ai/dsh-client-ui-settings-models`，不是插件自己的 `lib/client.js`。`npm run build` 仅构建插件，不能替代生成宿主补丁。修改生成器后用明确的未打补丁宿主源码生成/校验（源文件只读，哈希必须匹配）：
+
+```bash
+node scripts/settings-models-collapse.mjs --source /path/to/pristine-client.js
+node scripts/settings-models-collapse.mjs --source /path/to/pristine-client.js --check
+DSH_ROOT=/opt/dsh npm test
+```
+
+生成器不会隐式读取或修改已安装宿主。分发包包含预先验证的 `native/*.patch.json`，维护页显式确认后才应用。测试夹具与开发生成器不参与运行时补丁应用。
 
 ## 许可证
 
