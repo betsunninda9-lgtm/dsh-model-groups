@@ -6,7 +6,7 @@ import test from 'node:test';
 import { Readable } from 'node:stream';
 import { spawnSync } from 'node:child_process';
 import { ARTIFACTS, applyPlan, planPatches, sha256 } from '../scripts/native-patches.mjs';
-import { createMaintenance, maintenanceHandler, restorationPending, maintenanceStorage } from '../src/maintenance.js';
+import { MAINTENANCE_PROTOCOL, createMaintenance, maintenanceHandler, restorationPending, maintenanceStorage } from '../src/maintenance.js';
 import { autoPatch } from '../src/auto-patch.js';
 
 function fixture(t, overrides = {}) {
@@ -30,7 +30,9 @@ function fixture(t, overrides = {}) {
   t.after(() => { assert.equal(fs.realpathSync(temp), temp); assert.equal(path.dirname(temp), fs.realpathSync(os.tmpdir())); assert.ok(path.basename(temp).startsWith('dsh-maintenance-test-')); fs.rmSync(temp, { recursive: true }); });
   return { controller, root, home, artifacts, files, manager, calls: () => calls };
 }
-const confirmation = token => ({ action: 'restore-and-uninstall', confirmation: 'CONFIRM PATCH OPERATION', token });
+const pluginVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const protocol = { maintenanceProtocol: MAINTENANCE_PROTOCOL, clientVersion: pluginVersion };
+const confirmation = token => ({ ...protocol, action: 'restore-and-uninstall', confirmation: 'CONFIRM PATCH OPERATION', token });
 
 test('confirmed restoration checks all hashes, removes only own bundle and retains suppression marker', async t => {
   const f = fixture(t), before = await f.controller.snapshot();
@@ -188,9 +190,9 @@ test('legacy dependencies and unavailable inspection are warnings for all patch 
   let state = await f.controller.snapshot();
   assert.equal(state.blockers.length, 0); assert.equal(state.warnings.length, codes.length);
   assert.equal(state.canRestoreOnly, true); assert.equal(state.canRestore, true);
-  await f.controller.restore({action:'restore-only', token:state.token, confirmation:'CONFIRM PATCH OPERATION'});
+  await f.controller.restore({...protocol,action:'restore-only', token:state.token, confirmation:'CONFIRM PATCH OPERATION'});
   state = await f.controller.snapshot(); assert.equal(state.canApply,true);
-  await f.controller.restore({action:'apply', token:state.token, confirmation:'CONFIRM PATCH OPERATION'});
+  await f.controller.restore({...protocol,action:'apply', token:state.token, confirmation:'CONFIRM PATCH OPERATION'});
   assert.ok(planPatches(f.root,'check',f.artifacts).every(p=>p.state==='patched'));
 });
 test('newly proven activity blocks a previously confirmed removal', async t => {
@@ -218,11 +220,11 @@ test('HTTP owner admission, JSON-only, bounded body and safe errors', async () =
   let state = await f.controller.snapshot();
   assert.equal(state.canApply, false);
   assert.equal((await f.controller.snapshot()).token, state.token);
-  await f.controller.restore({action:'restore-only',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
+  await f.controller.restore({...protocol,action:'restore-only',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
   assert.equal(f.calls(), 0);
   state = await f.controller.snapshot();
   assert.equal(state.canApply, true);
-  const applied = await f.controller.restore({action:'apply',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
+  const applied = await f.controller.restore({...protocol,action:'apply',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
   assert.equal(applied.phase, 'applied');
   assert.equal(restorationPending(f.root,f.home), false);
   assert.equal(f.calls(),0);
@@ -232,7 +234,7 @@ test('HTTP owner admission, JSON-only, bounded body and safe errors', async () =
   const f = fixture(t,{manager:{listBundles:async()=>[]}});
   const state=await f.controller.snapshot();
   assert.equal(state.canRestore,false); assert.equal(state.canRestoreOnly,true);
-  await f.controller.restore({action:'restore-only',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
+  await f.controller.restore({...protocol,action:'restore-only',token:state.token,confirmation:'CONFIRM PATCH OPERATION'});
   assert.ok(planPatches(f.root,'check',f.artifacts).every(p=>p.state==='pristine'));
  });
  test('other engines sharing the installation stay hard blockers', async t => {
@@ -263,7 +265,37 @@ test('real backend snapshots validate frontend after all manual actions', async 
   const f=fixture(t);
   for(const action of ['restore-only','apply','restore-and-uninstall']) {
     const before=maintenanceSnapshot(await f.controller.snapshot());
-    const result=await f.controller.restore({action,token:before.token,confirmation:'CONFIRM PATCH OPERATION'});
+    const result=await f.controller.restore({...protocol,action,token:before.token,confirmation:'CONFIRM PATCH OPERATION'});
     assert.doesNotThrow(()=>maintenanceSnapshot(result));
   }
+});
+
+
+test('old or mismatched web clients cannot use fresh tickets or create a maintenance lock', async t => {
+  const f = fixture(t), before = await f.controller.snapshot();
+  assert.equal(before.pluginVersion, pluginVersion); assert.equal(before.maintenanceProtocol, MAINTENANCE_PROTOCOL);
+  const files = f.files.map(file => fs.readFileSync(file));
+  const raw = { action: 'restore-only', confirmation: 'CONFIRM PATCH OPERATION', token: before.token };
+  for (const input of [raw, { ...raw, ...protocol, clientVersion: '0.3.5' }, { ...raw, ...protocol, maintenanceProtocol: 1 }]) {
+    await assert.rejects(f.controller.restore(input), { code: 'CLIENT_VERSION_MISMATCH' });
+    assert.equal(fs.existsSync(f.home), false);
+    assert.deepEqual(f.files.map(file => fs.readFileSync(file)), files);
+  }
+  assert.equal((await f.controller.snapshot()).token, before.token, 'rejected stale clients do not consume valid consent');
+  const result = await f.controller.restore({ ...raw, ...protocol });
+  assert.equal(result.phase, 'restored');
+});
+
+test('late-file conflicts disable the batch but keep fixed per-file diagnosis and program hashes', async t => {
+  const f = fixture(t); fs.appendFileSync(f.files.at(-1), 'PRIVATE_SOURCE');
+  const report = await f.controller.snapshot();
+  assert.equal(report.canApply, false); assert.equal(report.canRestoreOnly, false); assert.equal(report.canRestore, false); assert.equal(report.token, null);
+  assert.equal(report.compatibility.files.at(-1).code, 'unrecognized_content');
+  assert.equal(report.compatibility.files.at(-1).observedSha256, sha256(fs.readFileSync(f.files.at(-1))));
+  assert.equal(report.patches.at(-1).applySupported, false);
+  assert.equal(report.compatibility.files[0].code, 'ready');
+  assert.equal(fs.existsSync(f.home), false);
+  const { maintenanceSnapshot, maintenanceDiagnostic } = await import('../src/maintenance-state.js');
+  const diagnostic = maintenanceDiagnostic({ snapshot: maintenanceSnapshot(report) });
+  assert.match(diagnostic, /unrecognized_content/); assert.doesNotMatch(diagnostic, /PRIVATE_SOURCE|node_modules|dsh-maintenance-test-|secret-token/);
 });

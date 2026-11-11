@@ -1,3 +1,5 @@
+import { compatibilitySnapshot, publicVersion } from './compatibility.js';
+export const MAINTENANCE_CLIENT_PROTOCOL = 2;
 export const MAINTENANCE_CONFIRMATION = 'CONFIRM PATCH OPERATION';
 export const MAINTENANCE_ENDPOINT = '/dsh-model-groups/maintenance';
 const MAINTENANCE_KEYS = ['dsh:model-groups:v1', 'dsh:model-groups:mode'];
@@ -20,7 +22,8 @@ export function maintenanceSnapshot(value) {
       && (blocker.count == null || (Number.isSafeInteger(blocker.count) && blocker.count > 0)))) {
     throw new Error('Invalid maintenance snapshot');
   }
-  return { phase: value.phase, restartRequired: value.restartRequired, canApply: value.canApply,
+  return { phase: value.phase, maintenanceProtocol: value.maintenanceProtocol === MAINTENANCE_CLIENT_PROTOCOL ? MAINTENANCE_CLIENT_PROTOCOL : null,
+    pluginVersion: publicVersion(value.pluginVersion), compatibility: compatibilitySnapshot(value.compatibility), restartRequired: value.restartRequired, canApply: value.canApply,
     canRestoreOnly: value.canRestoreOnly, canRestore: value.canRestore,
     token: value.token ?? null, patches: value.patches.map(patch => ({ state: patch.state, updateAvailable: patch.updateAvailable === true, applySupported: patch.applySupported !== false })),
     blockers: value.blockers.map(blocker => ({ code: blocker.code, count: blocker.count ?? null })),
@@ -38,7 +41,8 @@ export function maintenanceBlockerText(blocker) {
   const labels = {
     active_sessions: '存在正在运行的会话，请先停止运行中的任务。',
     active_turns: '存在正在运行的回合，请先等待结束或停止。',
-    patch_conflict: '补丁状态冲突，请先人工诊断，不会强制覆盖。',
+    patch_conflict: '补丁状态冲突，不会强制覆盖。请复制脱敏诊断；不要先卸载、还原或删除配置。',
+    client_version_mismatch: '网页与插件后端版本不一致，已禁止维护。请重启原引擎并刷新网页后重新检查。',
     unsupported_patch_build: '此宿主构建尚无经过验证的新版协议补丁，已阻止不完整更新；仍可关闭或卸载，不会改动密钥。',
     backup_missing: '缺少可验证的原版备份，无法安全恢复。',
     restart_required: '需要重启原引擎后重新检查。',
@@ -77,7 +81,7 @@ export function maintenanceBlockerText(blocker) {
 // Copy only allowlisted codes and enumerated state: unknown codes may contain secrets or paths.
 export function maintenanceDiagnostic(state) {
   const snapshot = state.snapshot;
-  const knownCodes = new Set(['active_sessions', 'active_turns', 'patch_conflict', 'unsupported_patch_build', 'backup_missing', 'restart_required',
+  const knownCodes = new Set(['active_sessions', 'active_turns', 'patch_conflict', 'client_version_mismatch', 'unsupported_patch_build', 'backup_missing', 'restart_required',
     'inspection_failed', 'config_inspection_failed', 'session_inspection_failed', 'session_service_missing',
     'process_inspection_failed', 'profile_inspection_failed', 'patch_inspection_failed', 'default_inspection_failed',
     'agent_inspection_failed', 'activity_unverified', 'not_removable', 'not_applicable', 'manager_unavailable',
@@ -91,6 +95,8 @@ export function maintenanceDiagnostic(state) {
   return JSON.stringify({
     status: snapshot?.phase ?? 'unknown', busy: !!state.busy, resultUnverified: !!state.error,
     restartRequired: snapshot?.restartRequired ?? null,
+    maintenanceProtocol: snapshot?.maintenanceProtocol ?? null, pluginVersion: publicVersion(snapshot?.pluginVersion),
+    compatibility: compatibilitySnapshot(snapshot?.compatibility),
     capabilities: snapshot ? { apply: snapshot.canApply, close: snapshot.canRestoreOnly, uninstall: snapshot.canRestore } : null,
     patches: snapshot?.patches.map(patch => patch.state) ?? [],
     blockers: snapshot?.blockers.map(diagnosticItem) ?? [],
@@ -109,7 +115,8 @@ export function maintenanceWarningText(warning) {
     + (warning.count ? `（${warning.count} 项）` : '');
 }
 
-export function createMaintenanceController({ request = (...args) => fetch(...args), storage = () => globalThis.localStorage } = {}) {
+export function createMaintenanceController({ request = (...args) => fetch(...args), storage = () => globalThis.localStorage,
+  clientVersion = typeof MODEL_GROUPS_CLIENT_VERSION === 'string' ? MODEL_GROUPS_CLIENT_VERSION : null } = {}) {
   let state = { snapshot: null, busy: false, error: '', cleanupWarning: false, patchedWarning: false };
   let disposed = false;
   let generation = 0;
@@ -120,17 +127,22 @@ export function createMaintenanceController({ request = (...args) => fetch(...ar
     if (!response.ok) throw new Error('Maintenance HTTP error');
     const envelope = await response.json();
     if (envelope?.ok !== true) throw new Error('Maintenance refused');
-    return maintenanceSnapshot(envelope.value);
+    const snapshot = maintenanceSnapshot(envelope.value);
+    if (clientVersion !== null && (snapshot.maintenanceProtocol !== MAINTENANCE_CLIENT_PROTOCOL || snapshot.pluginVersion !== clientVersion)) {
+      return { ...snapshot, versionMismatch: true, canApply: false, canRestoreOnly: false, canRestore: false, token: null,
+        blockers: [...snapshot.blockers, { code: 'CLIENT_VERSION_MISMATCH', count: null }] };
+    }
+    return snapshot;
   }
   function accept(snapshot) {
     let cleanupWarning = false;
-    if (snapshot.phase === 'removed') {
+    if (snapshot.phase === 'removed' && !snapshot.versionMismatch) {
       for (const key of MAINTENANCE_KEYS) {
         try { storage()?.removeItem(key); } catch { cleanupWarning = true; }
       }
     }
     update({ snapshot, cleanupWarning, patchedWarning: snapshot.patches.some(patch => patch.state === 'patched'),
-      error: snapshot.phase === 'failed' ? '维护操作失败，未确认完成。请刷新检查，不要强制覆盖。' : '' });
+      error: snapshot.versionMismatch ? '网页与插件后端版本不一致，已停止维护。请重启原引擎并刷新网页后复查。' : snapshot.phase === 'failed' ? '维护操作失败，未确认完成。请刷新检查，不要强制覆盖。' : '' });
   }
   async function run(action = null) {
     if (disposed || state.busy || (action && !maintenanceCanAction(state.snapshot, action))) return;
@@ -150,7 +162,7 @@ export function createMaintenanceController({ request = (...args) => fetch(...ar
         }
         update({ snapshot: { ...snapshot, canApply: false, canRestoreOnly: false, canRestore: false, token: null } });
         snapshot = await readSnapshot({ method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, token, confirmation: MAINTENANCE_CONFIRMATION }) });
+          body: JSON.stringify({ action, token, confirmation: MAINTENANCE_CONFIRMATION, ...(clientVersion === null ? {} : { maintenanceProtocol: MAINTENANCE_CLIENT_PROTOCOL, clientVersion }) }) });
         if (!current()) return;
       }
       accept(snapshot);

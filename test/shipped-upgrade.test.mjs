@@ -56,7 +56,7 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
   for (const input of inputs) fs.writeFileSync(path.join(beta1Artifacts, input.name), input.name === 'pi-ai.patch.json' ? beta1PiText : JSON.stringify(input.artifact));
 
   for (const [baseHash, pristinePi] of bases) for (const mode of ['pristine', 'v0.3.5', 'beta.5', '0.3.6-beta.1']) {
-    await t.test(`${baseHash.slice(0, 12)} ${mode} → beta.2 → exact pristine`, () => {
+    await t.test(`${baseHash.slice(0, 12)} ${mode} → latest stable → exact pristine`, () => {
       const buildInputs = inputs.map(input => input.name === 'pi-ai.patch.json' ? { ...input, pristine: pristinePi } : input);
       const copy = path.join(temp, `${baseHash.slice(0, 12)}-${mode}`); fs.mkdirSync(copy);
       fs.writeFileSync(path.join(copy, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }));

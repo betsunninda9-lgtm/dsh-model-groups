@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 import { createReact } from './helpers/picker-harness.mjs';
 import { createMaintenanceController, maintenanceCanAction, maintenanceCanRestore, maintenanceSnapshot, maintenanceBlockerText, maintenanceDiagnostic } from '../src/maintenance-state.js';
 
-const sample = (overrides = {}) => ({ phase: 'idle', restartRequired: false,
+const pluginVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const sample = (overrides = {}) => ({ maintenanceProtocol: 2, pluginVersion, phase: 'idle', restartRequired: false,
   patches: [{ name: '/never/render/server/path', state: 'patched' }], blockers: [], canApply: false, canRestoreOnly: true, canRestore: true, token: 'secret-token-never-render', ...overrides });
 const response = value => ({ ok: true, json: async () => ({ ok: true, value }) });
 function ui(responses) {
@@ -13,8 +14,8 @@ function ui(responses) {
   const hooks = createReact(() => { dirty = true; });
   const frame = { cells: [] };
   const calls = [], removed = [], copied = [];
-  const source = ['src/maintenance-state.js', 'src/settings-page.js'].map(path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replace(/^export /gm, '')).join('\n');
-  const sandbox = { react: hooks.react, fetch: async (...args) => {
+  const source = ['src/compatibility.js', 'src/maintenance-state.js', 'src/settings-page.js'].map(path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replace(/^import .*;\n/gm, '').replace(/^export /gm, '')).join('\n');
+  const sandbox = { MODEL_GROUPS_CLIENT_VERSION: pluginVersion, react: hooks.react, fetch: async (...args) => {
     calls.push(args);
     const next = responses.shift();
     if (next instanceof Error) throw next;
@@ -79,7 +80,7 @@ for (const [action, label, phase] of [
   assert.deepEqual(app.calls.map(call => call[1].method), ['GET', 'GET', 'POST']);
   assert.equal(app.calls[2][0], '/dsh-model-groups/maintenance');
   assert.equal(app.calls[2][1].credentials, 'same-origin');
-  assert.deepEqual(JSON.parse(app.calls[2][1].body), { action, token: 'secret-token-never-render', confirmation: 'CONFIRM PATCH OPERATION' });
+  assert.deepEqual(JSON.parse(app.calls[2][1].body), { action, token: 'secret-token-never-render', confirmation: 'CONFIRM PATCH OPERATION', maintenanceProtocol: 2, clientVersion: pluginVersion });
   assert.deepEqual(app.removed, phase === 'removed' ? ['dsh:model-groups:v1', 'dsh:model-groups:mode'] : []);
   assert.match(app.text(), /需要重启原引擎/);
   assert.equal(app.button('确认执行'), undefined);
@@ -241,4 +242,38 @@ test('unmounted page ignores POST response and does not clear storage', async ()
   app.click('关闭并卸载插件'); app.click('确认执行'); await app.settle();
   assert.equal(app.calls.length, 3); app.dispose();
   resolve(response(sample({ phase: 'removed' }))); await app.settle(); assert.deepEqual(app.removed, []);
+});
+
+
+for (const mismatch of [{ pluginVersion: '0.3.5', maintenanceProtocol: 2 }, { pluginVersion, maintenanceProtocol: 1 }, { pluginVersion: null, maintenanceProtocol: null }]) {
+  test(`stale backend ${JSON.stringify(mismatch)} disables maintenance and preserves preferences`, async () => {
+    const app = ui([response(sample({ ...mismatch, phase: 'removed' }))]); await app.settle();
+    assert.equal(app.calls.length, 1); assert.equal(app.button('关闭并卸载插件').props.disabled, true);
+    assert.equal(app.button('启用多密钥').props.disabled, true); assert.equal(app.button('关闭多密钥').props.disabled, true);
+    assert.match(app.text(), /版本不一致/); assert.doesNotMatch(app.text(), /卸载已确认|已确认关闭多密钥并卸载插件/); assert.deepEqual(app.removed, []); app.dispose();
+  });
+}
+
+test('backend version changing between initial GET and confirmation never POSTs', async () => {
+  const app = ui([response(sample()), response(sample({ pluginVersion: '0.3.5' }))]); await app.settle();
+  app.click('关闭多密钥'); app.click('确认执行'); await app.settle();
+  assert.deepEqual(app.calls.map(call => call[1].method), ['GET', 'GET']);
+  assert.match(app.text(), /版本不一致/); assert.deepEqual(app.removed, []); app.dispose();
+});
+
+test('compatibility guidance renders and copies only allowlisted identifiers, versions and hashes', async () => {
+  const compatibility = { schema: 1, pluginVersion, hostVersion: '0.2.2-rc.1', supportedDsh: '0.2.2-rc.1', path: '/PRIVATE_PATH',
+    files: [ { id: 'pi-ai.patch.json', state: 'conflict', code: 'unrecognized_content', installedVersion: '0.2.2-rc.1', observedSha256: 'a'.repeat(64), path: '/PRIVATE_PATH', source: 'PRIVATE_SOURCE' },
+      { id: '/PRIVATE_PATH', state: 'patched', code: 'ready', observedSha256: 'b'.repeat(64) },
+      { id: 'api-remotes.patch.json', state: 'conflict', code: 'PRIVATE_CODE', installedVersion: 'PRIVATE_VERSION', observedSha256: 'PRIVATE_HASH' } ] };
+  const app = ui([response(sample({ canRestore: false, canRestoreOnly: false, token: null, compatibility, patches: [{ state: 'conflict' }] }))]); await app.settle();
+  assert.match(app.text(), /未覆盖未知文件/); assert.match(app.text(), /不要先卸载、还原补丁或删除配置/);
+  assert.match(app.text(), /磁盘文件校验冲突/); assert.doesNotMatch(app.text(), /旧补丁已识别，但此构建不支持新版协议补丁/);
+  assert.match(app.text(), /pi-ai.patch.json/); assert.match(app.text(), new RegExp('a'.repeat(64)));
+  assert.doesNotMatch(app.text(), /PRIVATE_/);
+  app.click('复制脱敏诊断'); await app.settle();
+  const copied = JSON.parse(app.copied[0]); assert.equal(copied.compatibility.files.length, 2);
+  assert.equal(copied.compatibility.files[1].code, 'patch_manifest');
+  assert.equal(copied.compatibility.files[1].installedVersion, null); assert.equal(copied.compatibility.files[1].observedSha256, null);
+  assert.doesNotMatch(app.copied[0], /PRIVATE_|token/); app.dispose();
 });

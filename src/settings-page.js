@@ -1,3 +1,4 @@
+import { compatibilityGuidance } from './compatibility.js';
 export function ModelGroupsSettingsPage() {
   const h = react.createElement;
   const controller = react.useMemo(() => createMaintenanceController(), []);
@@ -9,8 +10,9 @@ export function ModelGroupsSettingsPage() {
   const snapshot = state.snapshot;
   const phaseLabels = { idle: '检查完成，可选择操作', applied: '多密钥已应用（磁盘状态）', restored: '多密钥已关闭，插件仍保留（磁盘状态）', removing: '正在卸载，尚未确认完成', removed: '已确认关闭多密钥并卸载插件', failed: '维护失败，未确认完成' };
   const updatesAvailable = snapshot?.patches.some(patch => patch.updateAvailable) ?? false;
-  const statusLabel = snapshot?.phase === 'idle'
-    ? snapshot.patches.some(patch => patch.applySupported === false) ? '旧补丁已识别，但此构建不支持新版协议补丁'
+  const statusLabel = snapshot?.versionMismatch ? '网页与维护后端版本不一致，请先重启并刷新' : snapshot?.phase === 'idle'
+    ? snapshot.patches.some(patch => patch.state === 'conflict') ? '磁盘文件校验冲突，已停止整批维护'
+      : snapshot.patches.some(patch => patch.applySupported === false) ? '旧补丁已识别，但此构建不支持新版协议补丁'
       : updatesAvailable ? '旧多密钥补丁已应用，新版更新待确认'
       : snapshot.patches.length && snapshot.patches.every(patch => patch.state === 'patched') ? '多密钥已启用（磁盘状态）'
       : snapshot.patches.length && snapshot.patches.every(patch => patch.state === 'pristine') ? '多密钥已关闭（磁盘状态）' : '磁盘状态待处理，请查看操作限制'
@@ -27,14 +29,16 @@ export function ModelGroupsSettingsPage() {
   return h('section', { className: 'mg-maintenance', 'aria-label': '模型分组设置', 'aria-busy': state.busy },
     h('h2', null, '模型分组 · 多密钥管理'),
     h('p', null, '选择操作，再确认一次即可。不会调用 AI，不会显示或删除 API 密钥。'),
+    snapshot?.pluginVersion && h('p', { className: 'mg-maintenance-help' }, `插件后端 ${snapshot.pluginVersion} · 宿主 ${snapshot.compatibility?.hostVersion ?? '版本未确认'}`),
     h('section', { className: 'mg-maintenance-card', 'aria-label': '当前状态' },
       h('div', { className: 'mg-maintenance-row' }, h('h3', null, '当前状态'), h('button', { type: 'button', disabled: state.busy, onClick: refresh }, state.busy ? '处理中…' : '刷新检查')),
       h('p', { role: 'status', 'aria-live': 'polite', className: 'mg-maintenance-help' }, state.busy ? '正在检查或执行维护，请勿关闭或重复操作。' : snapshot ? statusLabel : '尚无可验证状态，请刷新检查。'),
       state.error && h('p', { role: 'alert', className: 'mg-maintenance-error' }, state.error),
       state.patchedWarning && h('p', { role: 'alert', className: 'mg-maintenance-error' }, '警告：从普通插件列表卸载只移除插件，仍会留下宿主补丁，可能造成升级、文件冲突及旧多密钥模型依赖问题。请使用这里的“关闭并卸载插件”。'),
       snapshot?.restartRequired && h('p', { role: 'status' }, '本进程已实际修改宿主文件，需要重启原引擎并刷新；页面刷新或插件重载不等于进程重启。'),
+      compatibilityGuidance(snapshot?.compatibility) && h('p', { role: 'status', className: 'mg-maintenance-help' }, compatibilityGuidance(snapshot.compatibility)),
       updatesAvailable && h('p', { role: 'status' }, '多密钥补丁有更新可用；确认后将备份、校验并更新已识别的旧补丁。'),
-      snapshot?.phase === 'removed' && h('p', { role: 'status' }, '卸载已确认：仅清理本插件的两个浏览器显示偏好，密钥、历史和备份均保留。'),
+      snapshot?.phase === 'removed' && !snapshot.versionMismatch && h('p', { role: 'status' }, '卸载已确认：仅清理本插件的两个浏览器显示偏好，密钥、历史和备份均保留。'),
       snapshot?.warnings.length > 0 && h('p', { className: 'mg-maintenance-warning', role: 'status' }, '部分使用情况未验证，关闭前请阅读提示；检查提醒不会额外禁用操作。'),
       snapshot?.blockers.length > 0 && h('div', { role: 'alert' }, h('strong', null, '操作限制（各按钮以安全权限为准）'), h('ul', null, ...snapshot.blockers.map((blocker, index) => h('li', { key: index }, maintenanceBlockerText(blocker))))),
       state.cleanupWarning && h('p', { role: 'status' }, '卸载已确认，但浏览器阻止清理本插件的显示偏好；其他数据未受影响。')),
@@ -53,6 +57,8 @@ export function ModelGroupsSettingsPage() {
       h('p', null, '这里只验证磁盘和安全权限，运行时是否已切换未知。每次确认后会重新检查；状态变化需重新确认。未知文件不会强制覆盖，检查不完整仅提醒；操作仍以各自安全权限为准。'),
       snapshot?.warnings.length > 0 && h('ul', null, ...snapshot.warnings.map((warning, index) => h('li', { key: index }, maintenanceWarningText(warning)))),
       snapshot && h('ul', null, ...snapshot.patches.map((patch, index) => h('li', { key: index }, `宿主文件 ${index + 1}：${patchLabels[patch.state]}${patch.applySupported === false ? '（此构建不支持新版补丁）' : patch.updateAvailable ? '（更新可用）' : ''}`))),
+      snapshot?.compatibility && h('ul', null, ...snapshot.compatibility.files.map(item => h('li', { key: item.id }, `${item.id} · ${item.installedVersion ?? '版本未知'} · ${item.code} · SHA-256 ${item.observedSha256 ?? '不可读取'}`))),
+      h('p', null, '诊断仅含程序版本、固定文件标识与程序 SHA-256，不含文件路径、配置正文、密钥或聊天。升级失败请先保留现场，不要用另一构建的文件覆盖。'),
       h('button', { type: 'button', onClick: copy }, '复制脱敏诊断'),
       h('p', { role: 'status' }, copyStatus)));
 }

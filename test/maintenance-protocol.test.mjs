@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { maintenanceSnapshot, createMaintenanceController } from '../src/maintenance-state.js';
+import { createUnavailableMaintenance } from '../src/maintenance.js';
 
 const sample = (overrides = {}) => ({ phase: 'idle', restartRequired: false, patches: [{ state: 'pristine' }], blockers: [], canApply: false, canRestoreOnly: false, canRestore: false, ...overrides });
 test('blocked backend response without token remains a verifiable status', async () => {
@@ -31,4 +32,17 @@ test('strict extended API shape requires flags and token for any allowed action'
     assert.throws(() => maintenanceSnapshot(invalid), /Invalid maintenance snapshot/);
   }
   assert.equal(maintenanceSnapshot(sample({ phase: 'applied' })).phase, 'applied');
+});
+
+test('unavailable host retains the current handshake and reports host failure instead of stale web client', async () => {
+  const unavailable = createUnavailableMaintenance(), value = await unavailable.snapshot();
+  const controller = createMaintenanceController({ clientVersion: value.pluginVersion, request: async () => ({ ok: true, json: async () => ({ ok: true, value }) }) });
+  await controller.refresh();
+  const state = controller.getSnapshot();
+  assert.equal(value.maintenanceProtocol, 2);
+  assert.equal(state.snapshot.versionMismatch, undefined);
+  assert.equal(state.snapshot.compatibility.hostVersion, null);
+  assert.equal(state.snapshot.canApply, false); assert.equal(state.snapshot.canRestoreOnly, false); assert.equal(state.snapshot.canRestore, false);
+  assert.equal(state.snapshot.token, null); assert.deepEqual(state.snapshot.blockers, [{ code: 'HOST_UNKNOWN', count: null }]);
+  await assert.rejects(unavailable.restore({}), { code: 'HOST_UNKNOWN' });
 });

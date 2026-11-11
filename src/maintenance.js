@@ -1,9 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { planPatches, applyPlan, sha256 } from '../scripts/native-patches.mjs';
+import { planPatches, inspectPatches, applyPlan, sha256 } from '../scripts/native-patches.mjs';
 
 export const BUNDLE_NAME = 'dsh-model-groups';
+export const MAINTENANCE_PROTOCOL = 2;
+const pluginPackage = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const pluginVersion = pluginPackage.version;
 // Process-local evidence survives controller replacement and module HMR, but not an
 // engine restart. The restoration marker only suppresses automatic patching: it is
 // not evidence that this process has loaded old code. A new process's runtime
@@ -15,6 +18,18 @@ export function maintenanceStorage(root, home) {
 }
 export function restorationPending(root, home) {
   return fs.existsSync(path.join(maintenanceStorage(root, home), 'restore-pending.json'));
+}
+
+// Discovery failure is a host diagnostic, not a stale-client mismatch. Keep the
+// same public handshake even when no safe root or maintenance ticket exists.
+export function createUnavailableMaintenance() {
+  const blocker = { code: 'HOST_UNKNOWN', message: '无法验证当前宿主安装，不会修改未知文件。' };
+  return {
+    snapshot: async () => ({ phase: 'failed', maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion,
+      compatibility: { schema: 1, pluginVersion, hostVersion: null, supportedDsh: pluginPackage.engines.dsh, files: [] },
+      restartRequired: false, patches: [], blockers: [blocker], warnings: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null }),
+    restore: async () => { throw { ...blocker }; },
+  };
 }
 
 /** Local-only transaction. Inspection and removal are injected to keep tests off the live host. */
@@ -43,12 +58,16 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
   const generic = (code, message) => ({ code, message });
   async function assessment() {
     const blockers = [];
-    let plans = [], removable = false;
+    let plans = [], removable = false, compatibility;
     try {
       plans = patchPlans();
       if (plans.some(plan => plan.applySupported === false)) blockers.push(generic('UNSUPPORTED_PATCH_BUILD', '此宿主构建仅能识别旧补丁，尚无经过验证的新版协议补丁；不会执行不完整更新。仍可关闭或卸载。'));
     }
     catch { blockers.push(generic('PATCH_CONFLICT', '宿主版本或文件校验不匹配；未修改任何宿主文件，请先处理冲突。')); }
+    compatibility = plans.length ? { schema: 1, pluginVersion, hostVersion: '0.2.2-rc.1', supportedDsh: pluginPackage.engines.dsh,
+      files: plans.map(p => ({ id: p.name, state: p.state, code: !p.applySupported ? 'unsupported_patch_build' : p.updateAvailable ? 'update_available' : p.state === 'pristine' ? 'not_applied' : 'ready', installedVersion: p.artifact.version,
+        observedSha256: p.observedSha256, baseSha256: p.baseSha256, targetSha256: p.targetSha256 })) } : inspectPatches(root, artifacts);
+    compatibility.pluginVersion = pluginVersion;
     try {
       const report = await inspect();
       if (!report || !Array.isArray(report.blockers) || typeof report.fingerprint !== 'string') throw new Error('inspection');
@@ -66,7 +85,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     const hardCodes = new Set(['patch_conflict', 'unsupported_patch_build', 'active_turns', 'other_process', 'not_removable', 'manager_unavailable']);
     const warnings = blockers.filter(b => !hardCodes.has(b.code.toLowerCase()));
     const hard = blockers.filter(b => hardCodes.has(b.code.toLowerCase()));
-    return { plans, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([hard, removable, plans.map(p => [p.name, sha256(p.source), !!p.updateAvailable, p.applySupported, sha256(JSON.stringify(p.artifact))])])) };
+    return { plans, compatibility, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([pluginVersion, compatibility, hard, removable, plans.map(p => [p.name, sha256(p.source), !!p.updateAvailable, p.applySupported, sha256(JSON.stringify(p.artifact))])])) };
   }
   function view(report, executing = false) {
     const valid = report.plans.length > 0 && !report.blockers.some(b => b.code.toLowerCase() === 'patch_conflict');
@@ -74,7 +93,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     const dependencies = restoreBlockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
     const installBlockers = report.blockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
     const available = (!busy || executing) && phase !== 'removed';
-    return { phase, restartRequired: restartRequired(), patches: report.plans.map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })), blockers: report.blockers, warnings: report.warnings,
+    return { phase, maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion, compatibility: report.compatibility, restartRequired: restartRequired(), patches: report.plans.length ? report.plans.map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })) : report.compatibility.files.map(p => ({ name: p.id, state: p.state, updateAvailable: p.code === 'update_available', applySupported: ['ready', 'update_available', 'not_applied'].includes(p.code) })), blockers: report.blockers, warnings: report.warnings,
       token: null, canApply: available && valid && installBlockers.length === 0 && report.plans.some(p => p.state === 'pristine' || p.updateAvailable),
       canRestoreOnly: available && valid && dependencies.length === 0 && report.plans.some(p => p.state === 'patched'),
       canRestore: available && valid && restoreBlockers.length === 0,
@@ -91,6 +110,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
   }
   async function restore(input) {
     if (busy) throw generic('BUSY', '已有维护任务正在执行。');
+    if (input?.maintenanceProtocol !== MAINTENANCE_PROTOCOL || input?.clientVersion !== pluginVersion) throw generic('CLIENT_VERSION_MISMATCH', '网页与维护后端版本不一致，请重启原引擎并刷新网页后重新确认。');
     if (!['apply', 'restore-only', 'restore-and-uninstall'].includes(input?.action) || input?.confirmation !== 'CONFIRM PATCH OPERATION' ||
       !ticket || typeof input.token !== 'string' || input.token !== ticket.token || ticket.expires < now()) {
       throw generic('CONFIRMATION_REQUIRED', '确认已失效，请重新检查并明确确认。');
@@ -133,7 +153,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       if (remaining?.installed || remaining?.removable || remaining?.enabled) throw generic('REMOVE_UNVERIFIED', '尚未确认插件依赖已移除，请检查插件列表；补丁不会自动重新安装。');
       if (!patchPlans().every(p => p.state === 'pristine')) throw generic('VERIFY_FAILED', '卸载后宿主文件再次变化，不能确认完整恢复。');
       phase = 'removed';
-      return { phase, restartRequired: restartRequired(), patches: patchPlans().map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })), blockers: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null,
+      return { phase, maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion, compatibility: (await assessment()).compatibility, restartRequired: restartRequired(), patches: patchPlans().map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })), blockers: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null,
         notice: '已确认原版文件和插件依赖移除状态。密钥、历史和安全备份未删除；运行时状态未验证，是否需要重启以本进程实际文件修改记录为准。' };
     } catch (error) {
       phase = 'failed';

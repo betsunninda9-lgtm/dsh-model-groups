@@ -15,9 +15,11 @@ export function findDshRoot(entry = process.argv[1]) {
   while (true) {
     const candidate = path.join(dir, 'node_modules/@deepseek-ai/dsh-llm-pi-ai/package.json');
     if (fs.existsSync(candidate) && fs.realpathSync(candidate) === resolved) {
-      // Full patch planning validates the DSH package/version and every target.
-      planPatches(dir, 'check');
-      return dir;
+      // Discovery must survive unknown program hashes so maintenance can explain
+      // the conflict. The planner still validates every target before any write.
+      const inner = path.join(dir, 'node_modules/@deepseek-ai/dsh/package.json');
+      const host = JSON.parse(fs.readFileSync(fs.existsSync(inner) ? inner : path.join(dir, 'package.json'), 'utf8'));
+      if (host.name === '@deepseek-ai/dsh') return dir;
     }
     const parent = path.dirname(dir);
     if (parent === dir) break;

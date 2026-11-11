@@ -41,3 +41,20 @@ test('automatic patch validates all inputs, backs up outside package and repeats
   assert.equal(autoPatch(root, home).changed, 0);
   assert.deepEqual(planPatches(root, 'check').map(plan => fs.statSync(plan.file).mtimeMs), stats);
 });
+
+
+test('host discovery survives unsupported version and missing or unknown program targets without permitting writes', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-discovery-test-'));
+  t.after(() => { assert.equal(fs.realpathSync(root), root); assert.equal(path.dirname(root), fs.realpathSync(os.tmpdir())); assert.ok(path.basename(root).startsWith('dsh-discovery-test-')); fs.rmSync(root, { recursive: true }); });
+  const packageDir = path.join(root, 'node_modules/@deepseek-ai/dsh-llm-pi-ai'); fs.mkdirSync(packageDir, { recursive: true });
+  const entry = path.join(root, 'package.json');
+  fs.writeFileSync(entry, JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.3' }));
+  fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-llm-pi-ai', version: '0.2.3' }));
+  assert.equal(findDshRoot(entry), root);
+  assert.throws(() => autoPatch(root, path.join(root, 'untouched-home')), /only @deepseek-ai/);
+  assert.equal(fs.existsSync(path.join(root, 'untouched-home')), false);
+  fs.writeFileSync(entry, JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }));
+  assert.equal(findDshRoot(entry), root);
+  assert.throws(() => autoPatch(root, path.join(root, 'untouched-home')), /ENOENT/);
+  assert.equal(fs.existsSync(path.join(root, 'untouched-home')), false);
+});

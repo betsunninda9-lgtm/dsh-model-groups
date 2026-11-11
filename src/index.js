@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { findDshRoot } from './auto-patch.js';
-import { createMaintenance, maintenanceHandler } from './maintenance.js';
+import { createMaintenance, createUnavailableMaintenance, maintenanceHandler } from './maintenance.js';
 import { createHostInspection } from './maintenance-host.js';
 
 // Neither disposal nor ordinary package removal restores patches: HMR and updates
@@ -21,11 +21,7 @@ export function apply(ctx) {
     ctx.logger.error('多密钥安装校验失败，未强制覆盖未知文件。请查看维护页。');
   }
   ctx.inject(['webServer', 'connection', 'pluginManager'], child => {
-    const inspect = root ? createHostInspection(child, root, home) : async () => ({ blockers: [{ code: 'HOST_UNKNOWN', message: '无法验证当前宿主安装，禁止恢复。' }], fingerprint: '' });
-    const controller = root ? createMaintenance({ root, home, inspect, manager: child.pluginManager }) : {
-      snapshot: async () => ({ phase: 'failed', restartRequired: false, patches: [], blockers: (await inspect()).blockers, canRestore: false, canRestoreOnly: false, canApply: false, token: null }),
-      restore: async () => { throw { code: 'HOST_UNKNOWN', message: '无法验证当前宿主安装。' }; },
-    };
+    const controller = root ? createMaintenance({ root, home, inspect: createHostInspection(child, root, home), manager: child.pluginManager }) : createUnavailableMaintenance();
     child.effect(() => child.webServer.register({ kind: 'exact', path: '/dsh-model-groups/maintenance', handler: maintenanceHandler(controller, child.connection) }));
     child.effect(() => child.webServer.register({ kind: 'exact', path: '/dsh-model-groups/status', handler(req, res) {
       const admission = child.connection.admit(req);

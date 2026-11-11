@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { ARTIFACTS, applyPlan, planPatches, sha256, transformSource } from '../scripts/native-patches.mjs';
+import { ARTIFACTS, applyPlan, inspectPatches, planPatches, sha256, transformSource } from '../scripts/native-patches.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-multikey-patch-test-'));
@@ -255,4 +255,47 @@ test('shipped artifacts are reversible against installed targets or skip when no
       assert.fail(`Installed target ${artifact.target} has unrecognized content hash ${hash}`);
     }
   }
+});
+
+
+test('per-file compatibility explains a late unknown hash while the whole apply stays read-only', t => {
+  const f = fixture(t);
+  fs.appendFileSync(f.files.at(-1).file, 'PRIVATE_SOURCE_DO_NOT_DISCLOSE');
+  const before = f.files.map(item => fs.readFileSync(item.file));
+  const report = inspectPatches(f.root, f.artifacts);
+  assert.deepEqual(report.files.map(item => item.code), ['not_applied', 'not_applied', 'not_applied', 'not_applied', 'unrecognized_content']);
+  assert.equal(report.files.at(-1).observedSha256, sha256(before.at(-1)));
+  assert.equal(report.files[0].baseSha256, f.files[0].artifact.baseSha256);
+  assert.equal(report.files[0].targetSha256, f.files[0].artifact.resultSha256);
+  assert.doesNotMatch(JSON.stringify(report), /PRIVATE_SOURCE|before-|node_modules|dsh-multikey-patch-test-/);
+  assert.throws(() => applyPlan(planPatches(f.root, 'apply', f.artifacts), path.join(f.root, 'no-backups')), /unrecognized content/);
+  assert.equal(fs.existsSync(path.join(f.root, 'no-backups')), false);
+  assert.deepEqual(f.files.map(item => fs.readFileSync(item.file)), before);
+});
+
+test('compatibility distinguishes host version, package version, missing file and unsafe manifest without source leakage', t => {
+  const f = fixture(t);
+  const pkg = path.join(f.root, 'node_modules', f.files[0].artifact.packageName, 'package.json');
+  fs.writeFileSync(pkg, JSON.stringify({ name: f.files[0].artifact.packageName, version: '0.2.3' }));
+  assert.equal(inspectPatches(f.root, f.artifacts).files[0].code, 'package_version');
+  assert.equal(inspectPatches(f.root, f.artifacts).files[0].installedVersion, '0.2.3');
+  fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.3' }));
+  assert.ok(inspectPatches(f.root, f.artifacts).files.every(item => item.code === 'host_version'));
+  fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }));
+  assert.equal(fs.realpathSync(f.files[1].file), f.files[1].file); fs.unlinkSync(f.files[1].file);
+  assert.equal(inspectPatches(f.root, f.artifacts).files[1].code, 'target_unavailable');
+  fs.writeFileSync(path.join(f.artifacts, f.files[2].name), JSON.stringify({ ...f.files[2].artifact, target: '../private-config.yaml' }));
+  const report = inspectPatches(f.root, f.artifacts);
+  assert.equal(report.files[2].code, 'patch_manifest');
+  assert.equal(report.files[2].observedSha256, null);
+  assert.doesNotMatch(JSON.stringify(report), /private-config|before-|node_modules/);
+});
+
+test('diagnostic refuses metadata through a symlink and never follows it into configuration', t => {
+  const f = fixture(t), item = f.files[0];
+  const privateFile = path.join(f.root, 'private-config.yaml'); fs.writeFileSync(privateFile, 'DO_NOT_READ_SECRET_CONFIG');
+  assert.equal(fs.realpathSync(item.file), item.file); fs.unlinkSync(item.file); fs.symlinkSync(privateFile, item.file);
+  const entry = inspectPatches(f.root, f.artifacts).files[0];
+  assert.equal(entry.code, 'target_unavailable'); assert.equal(entry.observedSha256, null);
+  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /Unexpected target/);
 });

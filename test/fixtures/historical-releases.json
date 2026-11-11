@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "provenance": "Public archives were integrity-checked and their five native manifests compared byte-for-byte with these immutable git commits. Tests use local git objects only; no downloads or dependency installation.",
+  "archiveAudit": {
+    "releaseCount": 10,
+    "manifestCount": 50,
+    "tupleOccurrences": 68,
+    "distinctTuples": 8
+  },
+  "gitOnlyNote": "0.3.1 and 0.3.4-beta.1–4 have verified git manifests only. A null archiveSha256 explicitly means no public archive was downloaded or asserted.",
+  "releases": [
+    {
+      "version": "0.3.1",
+      "gitCommit": "94f7c34462adb15ad65fdef078b7b3ae0478f8d5",
+      "sourceKind": "git-tag-only",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/tree/94f7c34462adb15ad65fdef078b7b3ae0478f8d5/native",
+      "archiveSha256": null,
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "26fbfbff204c14d19654fcb2e72148f385dde83ae7628f9b3f79fe8e145cdd62",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.2",
+      "gitCommit": "f56d32be135601a323227bb275fb9760afd52600",
+      "sourceKind": "public-npm-tarball",
+      "sourceUrl": "https://registry.npmjs.org/dsh-model-groups/-/dsh-model-groups-0.3.2.tgz",
+      "archiveSha256": "6695e5edc3e3bc3adb990b03235018f9b59c9352860b9b5e235aa33c4a864f0f",
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "26fbfbff204c14d19654fcb2e72148f385dde83ae7628f9b3f79fe8e145cdd62",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.3",
+      "gitCommit": "af05bc148649ebe6a5f5f173f5f5ab6e419d5400",
+      "sourceKind": "public-npm-tarball",
+      "sourceUrl": "https://registry.npmjs.org/dsh-model-groups/-/dsh-model-groups-0.3.3.tgz",
+      "archiveSha256": "bdfbca2979464477ebdb0d590e75c94c2e55f18322649fc80d9fedb44dcd53be",
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "26fbfbff204c14d19654fcb2e72148f385dde83ae7628f9b3f79fe8e145cdd62",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.4-beta.1",
+      "gitCommit": "5141d1f62ee88f5c776470a65b63472df3f1b7f0",
+      "sourceKind": "git-tag-only",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/tree/5141d1f62ee88f5c776470a65b63472df3f1b7f0/native",
+      "archiveSha256": null,
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "26fbfbff204c14d19654fcb2e72148f385dde83ae7628f9b3f79fe8e145cdd62",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.4-beta.2",
+      "gitCommit": "6883e2855203b40d2ec7c05b17e8563dfcd98360",
+      "sourceKind": "git-tag-only",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/tree/6883e2855203b40d2ec7c05b17e8563dfcd98360/native",
+      "archiveSha256": null,
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "17a75a24e118615d88330146cbca73ae4da3e0d610adbee72babfccc8bb3ed46",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.4-beta.3",
+      "gitCommit": "94f3a2a0bbee345efa80df2de7417aa1a0342510",
+      "sourceKind": "git-tag-only",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/tree/94f3a2a0bbee345efa80df2de7417aa1a0342510/native",
+      "archiveSha256": null,
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.4-beta.4",
+      "gitCommit": "4ba5c35b101614487459451ae92876463950b4b0",
+      "sourceKind": "git-tag-only",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/tree/4ba5c35b101614487459451ae92876463950b4b0/native",
+      "archiveSha256": null,
+      "autoPatchOnLoad": true,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.4",
+      "gitCommit": "fc03c69acbe8980a6765d4488e2a6225f1ccd7ca",
+      "sourceKind": "public-npm-tarball",
+      "sourceUrl": "https://registry.npmjs.org/dsh-model-groups/-/dsh-model-groups-0.3.4.tgz",
+      "archiveSha256": "9645a8da736f23f1b76a501d5cf02e74319ae6d139c9434246d24cc868f4baea",
+      "autoPatchOnLoad": true,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.5-beta.1",
+      "gitCommit": "aad1806ac44438249611b480c480499afd608040",
+      "sourceKind": "github-release-asset",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.5-beta.1/dsh-model-groups-0.3.5-beta.1.tgz",
+      "archiveSha256": "9be4c9fef20517a2c9de2af3c1b6230dc05d4aa8e0d7128522a5ed9310d4d073",
+      "autoPatchOnLoad": true,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.5-beta.2",
+      "gitCommit": "60b5a1b46e8c797ef601c77eab7a0287b4b91a72",
+      "sourceKind": "github-release-asset",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.5-beta.2/dsh-model-groups-0.3.5-beta.2.tgz",
+      "archiveSha256": "7aba8d4e38d58f8ca9a3ab2349df55785f8819f40bb2b569a1e25f928a9efdde",
+      "autoPatchOnLoad": true,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.5-beta.3",
+      "gitCommit": "aeb67394c734597a98812f78a8da177456779aab",
+      "sourceKind": "github-release-asset",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.5-beta.3/dsh-model-groups-0.3.5-beta.3.tgz",
+      "archiveSha256": "54613778089b3977a8225dd0ff8d1a1e0ccb87db5407f77c8c5af8329318c27f",
+      "autoPatchOnLoad": true,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.5-beta.4",
+      "gitCommit": "469cba93298c23f50b292a616b9cc208b657dcf1",
+      "sourceKind": "github-release-asset",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.5-beta.4/dsh-model-groups-0.3.5-beta.4.tgz",
+      "archiveSha256": "273b4fd288f059fcc9d647c98b86c6ccd3d112ba004ffdd00ace4bf421eea288",
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.5-beta.5",
+      "gitCommit": "a7bc11ee2c04c84191f5bb586014e389157b40a2",
+      "sourceKind": "github-release-asset",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.5-beta.5/dsh-model-groups-0.3.5-beta.5.tgz",
+      "archiveSha256": "6394d683a7f1307e4cae713012481221687dad636cbe700215c880b2def8b5b9",
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "dc083c5eee37c2f35a37ce093e78464fd22d047af937bf6f5dacf944fcfddc18",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.5-beta.6",
+      "gitCommit": "28febbd37d63db30423710e8e70643cef202a9b2",
+      "sourceKind": "github-release-asset",
+      "sourceUrl": "https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.5-beta.6/dsh-model-groups-0.3.5-beta.6.tgz",
+      "archiveSha256": "d467295f0317efe885f310701bc855a2c03c13cc5207e1052f68687445e8131c",
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "e134c1095b4a3f2ba601cc45f82fd082d4f792ac4cafe04bd8c77260a9001704",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    },
+    {
+      "version": "0.3.5",
+      "gitCommit": "cb24fb2f36b3fe40cf70689a808a2b289f807ce0",
+      "sourceKind": "public-npm-tarball",
+      "sourceUrl": "https://registry.npmjs.org/dsh-model-groups/-/dsh-model-groups-0.3.5.tgz",
+      "archiveSha256": "8b58407ff5a566bbe80c027b0b4be6ed78736cf700e5dfbb8b1deaa1327028ef",
+      "autoPatchOnLoad": false,
+      "manifestSha256": {
+        "pi-ai.patch.json": "0f1da9352819c6344335a51fe7c0ebd88d1bad2cfcff1e3ceea060a5beccc0ea",
+        "settings-models.patch.json": "e134c1095b4a3f2ba601cc45f82fd082d4f792ac4cafe04bd8c77260a9001704",
+        "llm-typert.host.patch.json": "562cb8cc488b5ca43de37d2ead2622b6681f81e1137f7e3ab3b0258a1e3e1201",
+        "llm-typert.remote-client.patch.json": "98706408c2fcb5cfd586d712c7fabbc12fd80d9caa1be9263418c9cb722a229b",
+        "api-remotes.patch.json": "49da70f13a4ee8dbfa6f33b750b0c6f3bef4f39af707d3bc3fe1c6b17e5f9f57"
+      }
+    }
+  ]
+}

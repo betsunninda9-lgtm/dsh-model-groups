@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { compatibilitySnapshot } from '../src/compatibility.js';
 
 export const ARTIFACTS = ['pi-ai.patch.json', 'settings-models.patch.json', 'llm-typert.host.patch.json', 'llm-typert.remote-client.patch.json', 'api-remotes.patch.json'];
 const pluginRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -25,13 +26,16 @@ export function transformSource(source, artifact, reverse = false) {
 
 /** Validate ALL files before any modification. Check mode is read-only. */
 export function planPatches(dshRoot, mode = 'check', artifactDirectory = path.join(pluginRoot, 'native')) {
+  return planPatchFiles(dshRoot, mode, artifactDirectory, ARTIFACTS);
+}
+function planPatchFiles(dshRoot, mode, artifactDirectory, names) {
   if (!['check', 'apply', 'revert'].includes(mode)) throw new Error('Unknown patch mode');
   const root = fs.realpathSync(dshRoot);
   const inner = path.join(root, 'node_modules/@deepseek-ai/dsh/package.json');
   const dsh = JSON.parse(fs.readFileSync(fs.existsSync(inner) ? inner : path.join(root, 'package.json'), 'utf8'));
   if (dsh.name !== '@deepseek-ai/dsh' || dsh.version !== '0.2.2-rc.1') throw new Error('This patch supports only @deepseek-ai/dsh 0.2.2-rc.1');
   const seen = new Set();
-  return ARTIFACTS.map(name => {
+  return names.map(name => {
     let artifact = JSON.parse(fs.readFileSync(path.join(artifactDirectory, name), 'utf8'));
     if (artifact.version !== '0.2.2-rc.1' || !/^@deepseek-ai\/dsh-[a-z-]+$/.test(artifact.packageName)) throw new Error('Unsupported patch package/version');
     if (!Array.isArray(artifact.replacements) || artifact.replacements.length === 0 || !/^[0-9a-f]{64}$/.test(artifact.baseSha256) || !/^[0-9a-f]{64}$/.test(artifact.resultSha256)) throw new Error('Invalid patch manifest');
@@ -76,8 +80,50 @@ export function planPatches(dshRoot, mode = 'check', artifactDirectory = path.jo
     const latest = transformSource(original, targetArtifact);
     const updateAvailable = state === 'patched' && sha256(latest) !== hash;
     const result = mode === 'apply' ? latest : mode === 'revert' ? original : source;
-    return { name, artifact, file, source, result, state, updateAvailable, applySupported, mode: fs.statSync(file).mode & 0o777 };
+    return { name, artifact, file, source, result, state, updateAvailable, applySupported, observedSha256: hash, baseSha256: artifact.baseSha256, targetSha256: targetArtifact.resultSha256, mode: fs.statSync(file).mode & 0o777 };
   });
+}
+
+
+/** Diagnose each program independently, without weakening the all-or-nothing planner.
+ * Output is a closed schema: program hashes/versions only, never paths or errors. */
+export function inspectPatches(dshRoot, artifactDirectory = path.join(pluginRoot, 'native')) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'package.json'), 'utf8'));
+  let root, hostVersion = null;
+  try {
+    root = fs.realpathSync(dshRoot);
+    const inner = path.join(root, 'node_modules/@deepseek-ai/dsh/package.json');
+    const host = JSON.parse(fs.readFileSync(fs.existsSync(inner) ? inner : path.join(root, 'package.json'), 'utf8'));
+    if (host.name === '@deepseek-ai/dsh') hostVersion = host.version;
+  } catch { /* Do not expose filesystem or parser error messages. */ }
+  const files = ARTIFACTS.map(id => {
+    const item = { id, state: 'conflict', code: 'target_unavailable', installedVersion: null, observedSha256: null, baseSha256: null, targetSha256: null };
+    if (!root) return item;
+    // Collect only metadata from the exact manifest-owned, regular program path.
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(artifactDirectory, id), 'utf8'));
+      const prefix = `node_modules/${manifest.packageName}/`;
+      if (!/^@deepseek-ai\/dsh-[a-z-]+$/.test(manifest.packageName) || typeof manifest.target !== 'string' || !manifest.target.startsWith(prefix) || manifest.target.includes('..') || manifest.target.includes('\\')) throw new Error();
+      const file = path.resolve(root, manifest.target);
+      if (!inside(root, file) || fs.realpathSync(file) !== file || !fs.statSync(file).isFile()) throw new Error();
+      const installed = JSON.parse(fs.readFileSync(path.join(root, 'node_modules', manifest.packageName, 'package.json'), 'utf8'));
+      if (installed.name === manifest.packageName) item.installedVersion = installed.version;
+      item.observedSha256 = sha256(fs.readFileSync(file));
+    } catch { /* Safe incomplete metadata; planner still refuses unknown targets. */ }
+    try {
+      const [plan] = planPatchFiles(root, 'check', artifactDirectory, [id]);
+      Object.assign(item, { state: plan.state, code: !plan.applySupported ? 'unsupported_patch_build' : plan.updateAvailable ? 'update_available' : plan.state === 'pristine' ? 'not_applied' : 'ready',
+        baseSha256: plan.baseSha256, targetSha256: plan.targetSha256 });
+    } catch (error) {
+      const message = error?.message ?? '';
+      item.code = message === 'This patch supports only @deepseek-ai/dsh 0.2.2-rc.1' ? 'host_version'
+        : message === 'Installed native package version mismatch' ? 'package_version'
+        : message.startsWith('Refusing unrecognized content: ') ? 'unrecognized_content'
+        : error?.code === 'ENOENT' || error?.code === 'EACCES' || message === 'Unexpected target path or duplicate patch' ? 'target_unavailable' : 'patch_manifest';
+    }
+    return item;
+  });
+  return compatibilitySnapshot({ schema: 1, pluginVersion: pkg.version, hostVersion, supportedDsh: pkg.engines.dsh, files });
 }
 
 function stageReplacement(file, content, mode) {
