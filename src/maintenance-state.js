@@ -69,8 +69,8 @@ export function maintenanceBlockerText(blocker) {
     inspection_unknown: '无法确认运行状态，请先停止任务并使用安装诊断排查。',
     profile_unknown: '无法确认当前配置档，不会执行维护。',
     cross_profile_bundle: '其他配置档也在使用此插件，请先处理跨配置档依赖。',
-    alias_dependency: '仍有会话或配置引用多密钥模型，请先切换为普通模型再检查；本预览不会自动转换。',
-    key_config_dependency: '仍有多密钥配置依赖：请先禁用 multiKey 并清理 keyEntries 配置；已保存的密钥会保留。本预览不会自动转换。',
+    alias_dependency: '仍有会话或设置在使用多密钥模型。请先切换为普通模型；插件不会自动转换。',
+    key_config_dependency: '仍有供应商启用了多密钥。请先在「设置 → 模型」中关闭对应开关并保存；已保存的密钥会保留，配置不会自动转换。',
     expression_unknown: '存在无法安全判断的配置表达式，请先人工检查配置。',
     other_process: '其他引擎进程可能正在使用补丁，请先停止相关进程。',
   };

@@ -21,8 +21,8 @@ export function apply(ctx) {
       statusNotice.setAttribute('role', 'status');
       statusNotice.style.cssText = 'position:fixed;bottom:16px;right:16px;max-width:min(360px,80vw);z-index:1000;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#222);padding:12px;border:1px solid currentColor;border-radius:8px;box-sizing:border-box;pointer-events:none;';
       statusNotice.textContent = status.failed
-        ? '多密钥自动补丁未完成。请回到 App 对话查看引擎日志或运行安装诊断，勿强制覆盖。请暂勿编辑模型配置；可到「设置 → 模型分组」检查并安全恢复。'
-        : '多密钥补丁已自动安装。请先保存其他页面的草稿，再到 App 重启原引擎并刷新此网页。请暂勿编辑模型配置，避免新旧模块混用；维护入口仍可使用。';
+        ? '无法检查多密钥功能所需的 DSH 文件。请打开「设置 → 模型分组」查看详情，不要手动覆盖文件。'
+        : 'DSH 程序文件已更新。请先保存草稿，再重启 DSH 引擎并刷新网页。重启前请暂缓修改模型设置。';
       document.body.appendChild(statusNotice);
     }).catch(() => {});
   ctx.on('dispose', () => { statusDisposed = true; statusNotice?.remove(); });

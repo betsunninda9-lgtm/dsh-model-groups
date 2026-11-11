@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-groups",
-  "version": "0.3.6",
-  "description": "DSH 网页模型选择器：供应商与密钥配置分层折叠、多密钥独立协议与安全直升维护。支持 DSH 0.2.2-rc.1。",
+  "version": "0.3.7",
+  "description": "在 DSH 网页端按供应商和密钥配置选择模型，并为同一供应商的不同密钥分别设置模型和 API 协议。支持 DSH 0.2.2-rc.1。",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -32,6 +32,8 @@
     "!scripts/pi-ai-protocol.mjs",
     "cordis.patch.yml",
     "README.md",
+    "docs/maintenance.md",
+    "docs/images/*.webp",
     "LICENSE"
   ],
   "engines": {

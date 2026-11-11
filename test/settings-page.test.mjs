@@ -55,13 +55,13 @@ test('page GETs only; opening and cancelling dialog never POSTs or exposes serve
   assert.equal(app.calls.length, 1); assert.ok(app.button('确认执行'));
   app.click('取消'); assert.equal(app.calls.length, 1);
   assert.equal(app.button('确认执行'), undefined);
-  assert.match(app.text(), /从普通插件列表卸载只移除插件.*宿主补丁/);
+  assert.match(app.text(), /从普通插件列表卸载只移除插件.*不会还原 DSH 文件/);
   assert.match(app.text(), /多密钥已启用（磁盘状态）/);
   app.click('关闭多密钥');
-  assert.match(app.text(), /旧多密钥选择和配置可能影响后续使用或重启/);
-  assert.match(app.text(), /请先停止所有任务。部分使用情况未能检查不等于安全/);
+  assert.match(app.text(), /改为普通模型.*残留的多密钥配置可能影响 DSH 启动/);
+  assert.match(app.text(), /请先保存草稿并停止所有任务/);
   app.click('取消');
-  assert.match(app.text(), /运行时.*未知/);
+  assert.match(app.text(), /无法确认正在运行的引擎是否已加载更新/);
   assert.doesNotMatch(app.text(), /secret-token|server\/path/);
   app.dispose();
 });
@@ -82,7 +82,7 @@ for (const [action, label, phase] of [
   assert.equal(app.calls[2][1].credentials, 'same-origin');
   assert.deepEqual(JSON.parse(app.calls[2][1].body), { action, token: 'secret-token-never-render', confirmation: 'CONFIRM PATCH OPERATION', maintenanceProtocol: 2, clientVersion: pluginVersion });
   assert.deepEqual(app.removed, phase === 'removed' ? ['dsh:model-groups:v1', 'dsh:model-groups:mode'] : []);
-  assert.match(app.text(), /需要重启原引擎/);
+  assert.match(app.text(), /需要重启 DSH 引擎/);
   assert.equal(app.button('确认执行'), undefined);
   if (phase !== 'applied') assert.doesNotMatch(app.text(), /从普通插件列表卸载只移除插件/);
   app.dispose();
@@ -182,8 +182,8 @@ for (const phase of ['idle', 'applied', 'restored', 'removed']) {
   test(`${phase} does not imply restart without actual process-local file changes`, async () => {
     const app = ui([response(sample({ phase, restartRequired: false, patches: [{ state: 'pristine' }] }))]);
     await app.settle();
-    assert.doesNotMatch(app.text(), /需要重启原引擎|需重启原引擎|完成操作后需要/);
-    assert.match(app.text(), /运行时.*未知/);
+    assert.doesNotMatch(app.text(), /需要重启 DSH 引擎|需重启原引擎|完成操作后需要/);
+    assert.match(app.text(), /无法确认正在运行的引擎是否已加载更新/);
     app.dispose();
   });
 }
@@ -198,7 +198,7 @@ test('patched updates survive sanitization and show an actionable update button'
   assert.equal(app.button('启用多密钥'), undefined);
   app.click('更新多密钥补丁'); app.click('确认执行'); await app.settle();
   assert.equal(JSON.parse(app.calls[2][1].body).action, 'apply');
-  assert.match(app.text(), /需要重启原引擎/); app.dispose();
+  assert.match(app.text(), /需要重启 DSH 引擎/); app.dispose();
   assert.throws(() => maintenanceSnapshot(sample({ patches: [{ state: 'patched', updateAvailable: 'yes' }] })));
 });
 test('legacy-only build disables apply but keeps close/uninstall and shows only a fixed unsupported-build explanation', async () => {
