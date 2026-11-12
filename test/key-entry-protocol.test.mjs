@@ -133,7 +133,7 @@ test('every released pi-ai revision keeps its exact hashes and original reversib
   assert.equal(new Set(current.map(value => value.baseSha256)).size, current.length);
   assert.equal(current.length, 3, 'all three current hashes come from verified real program bytes');
   const third = current.find(value => value.baseSha256 === cancellationDelta.resultSha256);
-  assert.equal(third?.resultSha256, 'e999e1a7f2352177c653ff0cea6485c3b1d1ea95b40ea613fc0549e2c8e49662');
+  assert.equal(third?.resultSha256, 'c7d20ebe93753ae6f30d614121bac533fe5a8fa9372ea1c5fdc8bf2f7eba1d1d');
   assert.ok(revisions(previous).some(value => value.resultSha256 === cancellationDelta.legacyResultSha256));
   for (const revision of current) assert.deepEqual(revision.replacements.slice(-protocolReplacements().length), protocolReplacements());
 });
@@ -282,6 +282,31 @@ for (const revision of current) {
     }
     await assert.rejects(module.discoverModels({ provider: 'catalog-route', keyEntryId: 'missing', api: 'anthropic-messages' }, () => catalogStored('catalog-route', 'missing')), error => error.code === 'INVALID_CONFIG');
     assert.equal(module.probes.length, count, 'invalid protocol/entry never issues an endpoint call');
+  });
+
+  test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: anthropic routes strip the trailing /v1 the SDK adds itself`, { skip: !enabled }, async () => {
+    const module = runtime(transformSource(pristine, revision));
+    const adapter = new module.PiAiAdapter({ profiles: () => module.resolveProfiles(schemaProviders(module, config())), resolveApiKey: async () => 'fake-test-key' });
+    const options = { provider: 'gateway', messages: [{ role: 'user', content: [{ type: 'text', text: 'offline test' }] }] };
+    // A relay that publishes its root as `.../v1` works for OpenAI protocols,
+    // because those append `/chat/completions`; the Anthropic SDK appends
+    // `/v1/messages`, so an unnormalized base would double the segment.
+    for (const [id, api, wireModel, baseUrl] of [['overridden', 'anthropic-messages', 'shared-wire-model', 'https://gateway.invalid'], ['inherited', 'openai-completions', 'shared-wire-model', 'https://gateway.invalid/v1'], ['responses', 'openai-responses', 'neutral-model-name', 'https://gateway.invalid/v1']]) {
+      await chunks(adapter.stream({ ...options, model: module.keyModelId(id, wireModel) }));
+      const dispatched = module.requests.at(-1);
+      assert.equal(dispatched.api, api);
+      assert.equal(dispatched.model.baseUrl, baseUrl, `${api} keeps exactly one /v1`);
+    }
+    // The listing path and the wire path must agree, including a base with a
+    // deployment prefix and no trailing segment.
+    const prefixed = config({ baseURL: 'https://gateway.invalid/openai/v1' });
+    const prefixedProfiles = module.resolveProfiles(schemaProviders(module, prefixed));
+    const stored = module.storedDiscoveryProfile(prefixedProfiles, async () => 'fake-probe-key');
+    await module.discoverModels({ provider: 'gateway', keyEntryId: 'overridden' }, () => stored('gateway', 'overridden'));
+    assert.equal(module.probes.at(-1).url, 'https://gateway.invalid/openai/v1/models?limit=1000');
+    const prefixedAdapter = new module.PiAiAdapter({ profiles: () => prefixedProfiles, resolveApiKey: async () => 'fake-test-key' });
+    await chunks(prefixedAdapter.stream({ ...options, model: module.keyModelId('overridden', 'shared-wire-model') }));
+    assert.equal(module.requests.at(-1).model.baseUrl, 'https://gateway.invalid/openai');
   });
 
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: empty entry API edits invalidate registration facts`, { skip: !enabled }, () => {

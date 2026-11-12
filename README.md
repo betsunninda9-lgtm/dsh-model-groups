@@ -12,7 +12,7 @@
 dsh plugin --profile web add dsh-model-groups@latest --registry=https://registry.npmjs.org/
 ```
 
-如果 npm 尚未同步到你需要的版本，可以把 `dsh-model-groups@latest` 换成 [GitHub 0.3.7 正式版安装包](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.7/dsh-model-groups-0.3.7.tgz) 的下载地址。安装后，**重启正在使用的 DSH 引擎，再刷新网页**。只想给现有模型分组？装好就可以用，不需要启用多密钥。
+如果 npm 尚未同步到你需要的版本，可以把 `dsh-model-groups@latest` 换成 [GitHub 0.3.8 正式版安装包](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.8/dsh-model-groups-0.3.8.tgz) 的下载地址。安装后，**重启正在使用的 DSH 引擎，再刷新网页**。只想给现有模型分组？装好就可以用，不需要启用多密钥。
 
 ## 在对话中选模型
 
@@ -33,7 +33,7 @@ dsh plugin --profile web add dsh-model-groups@latest --registry=https://registry
 
 1. 打开 **设置 → 模型**，新增或编辑一个支持多密钥的供应商。在 **公共设置** 中填写共享的 API 地址和默认协议。
 2. 打开 **多密钥配置**，为第一项填写配置名称、API 密钥和模型列表；有更多密钥就点击 **添加密钥配置**。
-3. 如果某把密钥需要不同的 API 协议，在 **分组 API 协议** 中选择；不确定时保留 **跟随供应商**，并以供应商说明为准。可选协议包括 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages。
+3. 如果某把密钥需要不同的 API 协议，在 **分组 API 协议** 中选择；不确定时保留 **跟随供应商**，并以供应商说明为准。可选协议包括 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages。API 地址写中转站给你的那个（结尾带不带 `/v1` 都可以）：Anthropic 这一项会自动去掉结尾的 `/v1`，避免同一段路径出现两次。
 4. 点击 **应用**（新建时点击 **创建提供商**）。已保存的配置默认收起；要修改模型列表，点击 **展开详情**。编辑时将已保存的密钥输入框留空，原密钥会保留。
 
 ![展开后的密钥配置：分别填写 API 密钥、配置名称和协议，并可添加模型](docs/images/key-configuration.webp)

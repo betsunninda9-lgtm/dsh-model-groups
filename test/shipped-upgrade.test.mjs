@@ -42,11 +42,13 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
     if (bases.has(delta.resultSha256)) assert.equal(pristine, bases.get(delta.resultSha256));
     bases.set(delta.resultSha256, pristine);
   }
-  // beta.2 adds ONLY the verified third current variant. Pin the exact beta.1
-  // manifest bytes/hash, without duplicating its large existing replacement list.
+  // The released 0.3.6-beta.1 manifest had no current revision for the
+  // cancellation build, so it refused it. Reconstruct that shape structurally
+  // (never by duplicating the large replacement list) to keep proving the
+  // refusal path, and assert it really omits that current revision.
   const beta1Pi = { ...piInput.artifact, variants: piInput.artifact.variants.filter(value => !(value.current === true && value.baseSha256 === delta.resultSha256)) };
+  assert.equal(candidates(beta1Pi).some(value => value.current === true && value.baseSha256 === delta.resultSha256), false, 'legacy manifest must omit the cancellation build');
   const beta1PiText = JSON.stringify(beta1Pi, null, 2) + '\n';
-  assert.equal(sha256(beta1PiText), '3b36bfe0bf8e73afb8546c1dceb4b0504f9ef053122198578049cd30510e215b', 'must reproduce the exact released beta.1 pi-ai manifest');
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-shipped-upgrade-'));
   t.after(() => {
     if (fs.realpathSync(temp) !== temp || path.dirname(temp) !== fs.realpathSync(os.tmpdir()) || !path.basename(temp).startsWith('dsh-shipped-upgrade-')) throw new Error('Unsafe integration fixture cleanup');

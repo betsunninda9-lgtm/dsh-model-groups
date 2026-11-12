@@ -37,6 +37,30 @@ export function protocolReplacements() {
       before: '\t\tif (profile === void 0) throw new LlmError(`provider "${provider}" has no key entry "${keyEntryId}"`, "INVALID_CONFIG");\n\t\treturn {\n\t\t\theaders: profile.headers,',
       after: '\t\tif (profile === void 0) throw new LlmError(`provider "${provider}" has no key entry "${keyEntryId}"`, "INVALID_CONFIG");\n\t\treturn {\n\t\t\tapi: profile.api,\n\t\t\tbaseURL: profile.baseURL ?? catalogProvider(provider)?.baseUrl,\n\t\t\theaders: profile.headers,',
     },
+    {
+      // Anthropic's SDK appends `/v1/messages` itself, while OpenAI protocols
+      // append `/chat/completions`. A relay that publishes its root as `.../v1`
+      // therefore works for chat and doubles the segment for Anthropic. Normalize
+      // the model's base for that protocol so both spellings reach one path.
+      before: 'function listingUrl(baseURL, api) {\n\tconst base = baseURL.replace(/\\/+$/, "");',
+      after: '/** Strip trailing slashes and one trailing `/v1`, the segment the Anthropic SDK adds itself. */\nfunction anthropicRoot(baseURL) {\n\tconst base = baseURL.replace(/\\/+$/, "");\n\treturn base.endsWith("/v1") ? base.slice(0, -3) : base;\n}\nfunction listingUrl(baseURL, api) {\n\tconst base = baseURL.replace(/\\/+$/, "");',
+    },
+    {
+      before: '\t\tconst baseUrl = request.baseURL ?? base?.baseUrl ?? providerBaseUrl;\n\t\tif (baseUrl === void 0) invalid(provider, `model "${entry.id}" needs a baseURL; the installed catalog does not describe this route`);',
+      after: '\t\tconst configuredBaseUrl = request.baseURL ?? base?.baseUrl ?? providerBaseUrl;\n\t\tif (configuredBaseUrl === void 0) invalid(provider, `model "${entry.id}" needs a baseURL; the installed catalog does not describe this route`);\n\t\tconst baseUrl = api === "anthropic-messages" ? anthropicRoot(configuredBaseUrl) : configuredBaseUrl;',
+    },
+    {
+      // listingUrl already normalized that segment; reuse the same rule so a
+      // patched build cannot drift between the listing path and the wire path.
+      before: '\tif (api !== "anthropic-messages") return `${base}/models`;\n\treturn `${base.endsWith("/v1") ? base.slice(0, -3) : base}/v1/models?limit=${String(ANTHROPIC_MODEL_LIMIT)}`;',
+      after: '\tif (api !== "anthropic-messages") return `${base}/models`;\n\treturn `${anthropicRoot(base)}/v1/models?limit=${String(ANTHROPIC_MODEL_LIMIT)}`;',
+    },
+    {
+      // The comment above listingUrl documented the old asymmetry as intended.
+      // Now that model requests normalize too, say what actually happens.
+      before: '* gateway documentation publishes both spellings of the same root. Only this\n* listing URL normalizes that segment; model requests receive the configured\n* `baseURL` unchanged.\n*/',
+      after: '* gateway documentation publishes both spellings of the same root. Anthropic\n* listings and model requests both normalize it, because the Anthropic SDK\n* appends `/v1/messages` on its own while OpenAI protocols append\n* `/chat/completions`; without this, one root would work for chat and double\n* the segment for Anthropic.\n*/',
+    },
   ];
 }
 
