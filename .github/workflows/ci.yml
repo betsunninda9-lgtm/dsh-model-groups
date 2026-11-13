@@ -1,0 +1,46 @@
+name: Automatic checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build and test (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source and historical test fixtures
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # No dependencies or lockfile: no install step is needed.
+      - name: Check committed client bundle before rebuilding
+        run: npm run check:build
+      - name: Run automated tests
+        run: npm test
+      - name: Verify package can be built
+        run: npm pack --dry-run
+      - name: Ensure packaging did not change committed bundle
+        run: git diff --exit-code -- lib/client.js
+      - name: Explain test coverage
+        if: always()
+        run: |
+          echo '## 检查范围' >> "$GITHUB_STEP_SUMMARY"
+          echo '检查已提交的网页产物、现有自动测试和打包流程；不发布插件，也不安装宿主补丁。' >> "$GITHUB_STEP_SUMMARY"
+          echo '缺少真实 DSH 程序文件的集成测试会明确跳过；绿色结果不能代替宿主集成测试和手机触摸验收。' >> "$GITHUB_STEP_SUMMARY"
