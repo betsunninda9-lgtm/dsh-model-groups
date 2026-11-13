@@ -19,8 +19,6 @@ jobs:
     name: Build and test (Node 22)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      DSH_ROOT: ''
     steps:
       - name: Check out source and historical test fixtures
         uses: actions/checkout@v4
