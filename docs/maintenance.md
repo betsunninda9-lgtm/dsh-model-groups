@@ -48,6 +48,12 @@ node scripts/settings-models-collapse.mjs --source /path/to/pristine-client.js -
 
 旧 0.3.8 与 0.3.9-beta.1 的设置补丁，以及 0.3.9-beta.1 的后端补丁，保存在测试夹具中并作为可升级、可还原的历史变体保留。完整程序生成还会验证正向和反向变换均逐字匹配，防止替换片段互相干扰。
 
+## 分组能力默认规则的验证
+
+`src/capability-defaults.js` 的纯函数同时嵌入设置页与后端补丁。分组保存可选的 `capabilityDefaults`（`vision`、`reasoning` 布尔值），模型保存可选的 `capabilityOverrides`：缺省跟随分组，布尔值为单独开关，`original` 保留旧字段及目录继承。未启用分组规则时沿用旧行为；模型原始 `input`、`reasoningEfforts` 保持原样，后端在解析条目时计算实际能力，避免关闭再开启时丢失定制参数。
+
+首次启用必须选择如何对待旧模型，默认保留。拉取列表仍用原有按 ID 保留已配置条目的流程，新条目没有例外元数据，自动跟随。能力设置与模型列表都在同一配置路径内保存，不另存浏览器规则或单独调用新接口。验证需覆盖实际 schema、目录能力、请求派发的强度映射、YAML 重读、初次启用、例外及重置、分组和模型排序、旧配置未启用不变。真实中转站能力和手机布局按 `docs/capabilities-beta.md` 实机核对。
+
 ## 诊断与恢复
 
 只读诊断（请替换实际安装路径）：
