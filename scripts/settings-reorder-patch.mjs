@@ -1,17 +1,20 @@
 import { createSettingsReorder, useSettingsReorder } from './settings-reorder.mjs';
+import { orderedKeyEntries } from '../src/hierarchy.js';
 
 export function addSettingsReorder(initial, apply) {
   let current = initial;
   const replace = (before, after) => { apply(before, after); current = current.replace(before, after); };
   const anchor = 'const MULTI_KEY_ENTRY_ID =';
-  replace(anchor, `${createSettingsReorder.toString()}\n\t\t${useSettingsReorder.toString()}\n\t\t${anchor}`);
+  replace(anchor, `${orderedKeyEntries.toString()}\n\t\t${createSettingsReorder.toString()}\n\t\t${useSettingsReorder.toString()}\n\t\t${anchor}`);
+  replace('children: [Object.entries(entries).map(([id, candidate], index) => {', 'children: [orderedKeyEntries(entries).map(([id, candidate], index) => {');
+  replace('return Object.fromEntries(Object.entries(entries).map(([id, entry]) => {', 'return Object.fromEntries(orderedKeyEntries(entries).map(([id, entry]) => {');
   replace('const anyBusy = Object.values(busyEntries).some(Boolean);', `const anyBusy = Object.values(busyEntries).some(Boolean);
-\t\t\tconst savedEntryOrder = Object.keys(props.savedEntries ?? props.persistedEntries ?? {});
+\t\t\tconst savedEntryOrder = orderedKeyEntries(props.savedEntries ?? props.persistedEntries ?? {}).map(([id]) => id);
 \t\t\tconst reorder = useSettingsReorder({ disabled: disabled || anyBusy, selector: "[data-key-entry-id]", move: (id, offset) => {
-\t\t\t\tconst ordered = Object.entries(entries), from = ordered.findIndex(([key]) => key === id), to = from + offset;
+\t\t\t\tconst ordered = orderedKeyEntries(entries), from = ordered.findIndex(([key]) => key === id), to = from + offset;
 \t\t\t\tif (from < 0 || to < 0 || to >= ordered.length) return;
 \t\t\t\tconst [moved] = ordered.splice(from, 1); ordered.splice(to, 0, moved);
-\t\t\t\tonChange(Object.fromEntries(ordered));
+\t\t\t\tonChange(Object.fromEntries(ordered.map(([key, entry], sortOrder) => [key, { ...entry, sortOrder }])));
 \t\t\t} });`);
   replace('const dirty = multiKeyEntryDirty(entry, props.savedEntries?.[id] ?? props.persistedEntries?.[id], draft);', 'const dirty = savedEntryOrder.indexOf(id) !== index || multiKeyEntryDirty(entry, props.savedEntries?.[id] ?? props.persistedEntries?.[id], draft);');
   const before = 'children: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["rowName"],';

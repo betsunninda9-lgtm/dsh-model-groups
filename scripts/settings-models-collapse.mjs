@@ -208,9 +208,10 @@ for (const [locale, values] of Object.entries(translations)) {
 }
 addSettingsReorder(current, replace);
 const shipped = readArtifact('native/settings-models.patch.json');
+const previousTouch = readArtifact('test/fixtures/settings-models/v0.3.9-beta.1.json');
 const previousStable = readArtifact('test/fixtures/settings-models/v0.3.8.json');
 const variant = item => ({ baseSha256: item.baseSha256, resultSha256: item.resultSha256, replacements: item.replacements });
-const artifact = { ...legacy, current: true, resultSha256: fullSource ? sha256(current) : shipped.resultSha256, replacements: [...legacy.replacements, ...delta], variants: [variant(stable), variant(legacy), variant(previousStable), ...(legacy.variants ?? [])] };
+const artifact = { ...legacy, current: true, resultSha256: fullSource ? sha256(current) : shipped.resultSha256, replacements: [...legacy.replacements, ...delta], variants: [variant(stable), variant(legacy), variant(previousStable), variant(previousTouch), ...(legacy.variants ?? [])] };
 // Validate full generated JavaScript BEFORE writing the distributable patch.
 new Function(current);
 if (fullSource && (transformSource(base, artifact) !== current || transformSource(current, artifact, true) !== base)) throw new Error('Settings patch roundtrip mismatch');

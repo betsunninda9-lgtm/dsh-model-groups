@@ -30,6 +30,24 @@ const legacyKey = '@key/provider/%40legacy';
 const rank = (items, query) => items.filter(item => item.name.toLowerCase().includes(query.toLowerCase()));
 const route = model => ({ provider: 'provider', model });
 
+test('explicit saved ranks override transport key order including numeric ids, and keep legacy and new groups stable last', () => {
+  const entries = {
+    '2': { name: 'Second', sortOrder: 1, models: [{ id: 'b' }] },
+    '10': { name: 'Tenth', sortOrder: 0, models: [{ id: 'a' }] },
+    legacy: { name: 'Legacy', models: [{ id: 'c' }] },
+    appended: { name: 'New', models: [{ id: 'd' }] },
+  };
+  const config = { provider: { multiKey: true, keyEntries: JSON.parse(JSON.stringify(entries)) } };
+  const catalog = [{ id: 'provider', models: Object.entries(entries).map(([id, entry]) => ({ id: alias(id, entry.models[0].id) })) }];
+  const before = structuredClone(config);
+  const tree = buildModelHierarchy(catalog, config, {});
+  assert.deepEqual(tree[0].children.map(child => child.entryId), ['10', '2', 'legacy', 'appended']);
+  assert.deepEqual(config, before);
+  config.provider.keyEntries.legacy.sortOrder = -1;
+  config.provider.keyEntries.appended.sortOrder = NaN;
+  assert.deepEqual(buildModelHierarchy(catalog, config, {})[0].children.map(child => child.entryId), ['10', '2', 'legacy', 'appended']);
+});
+
 test('every original provider keeps its own fold; only native multi-key providers gain children', () => {
   const tree = buildModelHierarchy(groups, providers, {}, current);
   assert.deepEqual(tree.map(root => [root.kind, root.key, root.name, root.expanded, root.modelCount]), [

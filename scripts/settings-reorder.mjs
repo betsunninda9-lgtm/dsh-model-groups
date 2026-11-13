@@ -10,8 +10,9 @@ export function createSettingsReorder({ handle, row, selector, commit, delay = 4
   let x, y, startX, startY, pointerId;
   const oldOutline = row.style.outline;
   const oldOpacity = row.style.opacity;
-  let targetShadow;
+  let targetShadow, marker;
   function clearTarget() {
+    marker?.remove(); marker = undefined;
     if (target) target.style.boxShadow = targetShadow;
     target = undefined;
   }
@@ -25,7 +26,28 @@ export function createSettingsReorder({ handle, row, selector, commit, delay = 4
     const rect = target.getBoundingClientRect();
     half = y < rect.top + rect.height / 2 ? 'before' : 'after';
     targetShadow = target.style.boxShadow;
-    target.style.boxShadow = `inset 0 ${half === 'before' ? 3 : -3}px 0 var(--dsw-alias-label-primary, #679cff)`;
+    target.style.boxShadow = `inset 0 ${half === 'before' ? 3 : -3}px 0 #3987ff`;
+    // A viewport overlay stays above card borders and does not move the rows.
+    const edge = half === 'before' ? rect.top : rect.bottom;
+    if (edge < 0 || edge > win.innerHeight) return;
+    const visibleEdge = Math.max(4, Math.min(win.innerHeight - 4, edge));
+    marker = doc.createElement('div');
+    marker.setAttribute('data-settings-reorder-marker', '');
+    marker.setAttribute('aria-hidden', 'true');
+    Object.assign(marker.style, {
+      position: 'fixed', pointerEvents: 'none', zIndex: '2147483647',
+      left: `${Math.max(8, bounds.left)}px`, right: `${Math.max(8, win.innerWidth - bounds.right)}px`,
+      top: `${visibleEdge - 2}px`, height: '4px', borderRadius: '4px',
+      background: '#3987ff', boxShadow: '0 0 0 2px #fff, 0 2px 8px #0008'
+    });
+    const label = doc.createElement('span');
+    label.textContent = doc.documentElement.lang?.startsWith('en') ? 'Release to place here' : '松手后放在这里';
+    Object.assign(label.style, {
+      position: 'absolute', right: '4px', top: edge < 44 ? '8px' : '-30px',
+      padding: '4px 10px', borderRadius: '6px', color: '#fff', background: '#175fc9',
+      font: 'bold 13px/20px sans-serif', whiteSpace: 'nowrap', boxShadow: '0 2px 8px #0005'
+    });
+    marker.appendChild(label); doc.body.appendChild(marker);
   }
   const scrollParent = () => {
     for (let node = list; node && node !== doc.documentElement; node = node.parentElement) {

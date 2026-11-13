@@ -18,6 +18,17 @@ export function decodeKeyModelId(model) {
   } catch { return undefined; }
 }
 
+/** Explicit ranks survive host equality checks, schema parsing, and reloads.
+ * Unranked legacy/new entries retain their existing relative order at the end.
+ */
+export function orderedKeyEntries(entries) {
+  const rank = entry => Number.isSafeInteger(entry?.sortOrder) && entry.sortOrder >= 0 ? entry.sortOrder : Infinity;
+  return Object.entries(entries ?? {}).sort(([, left], [, right]) => {
+    const a = rank(left), b = rank(right);
+    return a === b ? 0 : a < b ? -1 : 1;
+  });
+}
+
 export function keyEntryGroupKey(provider, entryId) {
   return `@key/${encodeURIComponent(provider)}/${encodeURIComponent(entryId)}`;
 }
@@ -50,7 +61,7 @@ export function buildModelHierarchy(groups, providers, preferences, current = nu
     }
     const byEntry = new Map();
     const configured = profile?.keyEntries && typeof profile.keyEntries === 'object' ? profile.keyEntries : {};
-    for (const entryId of Object.keys(configured)) {
+    for (const [entryId] of orderedKeyEntries(configured)) {
       if (KEY_ENTRY_ID.test(entryId) && !forbiddenEntry(entryId)) byEntry.set(entryId, []);
     }
     for (const model of aliases) {

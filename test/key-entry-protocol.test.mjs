@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sha256, transformSource } from '../scripts/native-patches.mjs';
 import { buildProtocolArtifact, protocolReplacements } from '../scripts/pi-ai-protocol.mjs';
+import { buildModelHierarchy } from '../src/hierarchy.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const artifact = JSON.parse(fs.readFileSync(path.join(root, 'native/pi-ai.patch.json'), 'utf8'));
@@ -133,7 +134,14 @@ test('every released pi-ai revision keeps its exact hashes and original reversib
   assert.equal(new Set(current.map(value => value.baseSha256)).size, current.length);
   assert.equal(current.length, 3, 'all three current hashes come from verified real program bytes');
   const third = current.find(value => value.baseSha256 === cancellationDelta.resultSha256);
-  assert.equal(third?.resultSha256, 'c7d20ebe93753ae6f30d614121bac533fe5a8fa9372ea1c5fdc8bf2f7eba1d1d');
+  assert.equal(third?.resultSha256, '70dd30c46c5504422738a158acf789bb6fe43cff9b134d5ddf5e5c3da3236340');
+  const beta1 = JSON.parse(fs.readFileSync(path.join(root, 'test/fixtures/pi-ai/v0.3.9-beta.1.json'), 'utf8'));
+  for (const old of revisions(beta1)) {
+    const retained = all.find(value => value.resultSha256 === old.resultSha256);
+    assert.ok(retained, 'beta1 must remain directly reversible');
+    assert.deepEqual(retained.replacements, old.replacements);
+    assert.notEqual(retained.current, true);
+  }
   assert.ok(revisions(previous).some(value => value.resultSha256 === cancellationDelta.legacyResultSha256));
   for (const revision of current) assert.deepEqual(revision.replacements.slice(-protocolReplacements().length), protocolReplacements());
 });
@@ -166,6 +174,50 @@ for (const revision of current) {
   });
 
   const enabled = pristine && require;
+  test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: saved group ranks reach live loader, schema, YAML reload and picker`, { skip: !enabled }, async () => {
+    const module = runtime(transformSource(pristine, revision));
+    const { deepEqual } = require('@deepseek-ai/cosmokit');
+    const { Entry } = require('@deepseek-ai/cordis-plugin-loader');
+    const yaml = require('yaml');
+    const original = config();
+    const ordered = Object.entries(original.gateway.keyEntries).reverse();
+    const reorderedOnly = { gateway: { ...original.gateway, keyEntries: Object.fromEntries(ordered) } };
+    assert.equal(deepEqual(original, reorderedOnly, true), true, 'actual host loader ignores object insertion order: beta1 regression');
+    const reordered = { gateway: { ...original.gateway, keyEntries: Object.fromEntries(ordered.map(([id, entry], sortOrder) => [id, { ...entry, sortOrder }])) } };
+    assert.equal(deepEqual(original, reordered, true), false, 'ranks are actual values so raw config triggers an update');
+    const live = module.Config({ providers: original });
+    const events = [];
+    const parentContext = {};
+    const context = Object.create(parentContext);
+    const fiber = { uid: 1, state: 2, effectiveConfig: live, runtime: { Config: module.Config }, resolveConfig: value => module.Config(value), ctx: context };
+    context.fiber = fiber; context.emit = (...args) => events.push(args); context.logger = { debug() {}, warn() {} };
+    const entry = { options: { id: 'test', config: { providers: original } }, parent: { ctx: parentContext }, ctx: context, fiber, disabled: false, context,
+      _commitVolatile: Entry.prototype._commitVolatile,
+      _patchContext: () => { throw new Error('order changes must use existing volatile lifecycle'); },
+    };
+    await Entry.prototype.update.call(entry, { config: { providers: reorderedOnly } });
+    assert.deepEqual(Object.keys(live.providers.get().gateway.keyEntries), Object.keys(original.gateway.keyEntries), 'beta1 accepted save leaves live providers unchanged');
+    await Entry.prototype.update.call(entry, { config: { providers: reordered } });
+    assert.deepEqual(Object.keys(live.providers.get().gateway.keyEntries), ordered.map(([id]) => id));
+    assert.equal(events.some(args => args.includes('loader/volatile-update')), true);
+    const document = yaml.parse(yaml.stringify({ providers: reordered }));
+    const restored = module.Config(document).providers.get();
+    assert.equal(restored.gateway.keyEntries.responses.sortOrder, 0, 'schema retains optional explicit rank after reload');
+    const catalog = [{ id: 'gateway', models: Object.entries(original.gateway.keyEntries).flatMap(([id, entry]) => entry.models.map(model => ({ id: module.keyModelId(id, model.id) }))) }];
+    assert.deepEqual(buildModelHierarchy(catalog, restored, {})[0].children.map(child => child.entryId), ordered.map(([id]) => id));
+    // Model order is an array: it already triggers the actual same live update.
+    const modelConfig = structuredClone(reordered);
+    modelConfig.gateway.keyEntries.inherited.models = [{ id: 'last' }, { id: 'first' }];
+    await Entry.prototype.update.call(entry, { config: { providers: modelConfig } });
+    const changedModels = structuredClone(modelConfig);
+    changedModels.gateway.keyEntries.inherited.models.reverse();
+    await Entry.prototype.update.call(entry, { config: { providers: changedModels } });
+    assert.deepEqual(live.providers.get().gateway.keyEntries.inherited.models.map(model => model.id), ['first', 'last']);
+    for (const sortOrder of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, NaN, '0']) {
+      assert.throws(() => module.keyEntryProfile({ ...original.gateway.keyEntries.inherited, sortOrder }), /expected/);
+    }
+    assert.equal(module.keyEntryProfile.dict.sortOrder.meta.required, undefined);
+  });
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: actual optional schema and strict/deferred fail-closed resolver`, { skip: !enabled }, () => {
     const module = runtime(transformSource(pristine, revision));
     const inputs = config();

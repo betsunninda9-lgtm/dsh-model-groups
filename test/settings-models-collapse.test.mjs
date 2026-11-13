@@ -62,7 +62,7 @@ function props() {
 }
 
 test('generated shipped settings patch is hash locked, current and reversible in memory', () => {
-  assert.equal(artifact.variants.length, 3);
+  assert.equal(artifact.variants.length, 4);
   assert.equal(artifact.current, true);
   const stable = JSON.parse(fs.readFileSync(new URL('fixtures/settings-models/v0.3.5.json', import.meta.url), 'utf8'));
   assert.deepEqual(artifact.variants[0].replacements, stable.replacements);
@@ -310,7 +310,8 @@ test('group handles reorder only the draft; retain key text, expanded cards and 
   handle.props.onKeyDown(arrow('ArrowUp')); tree = h.render(p);
   assert.deepEqual(Object.keys(p.entries), ['two', 'one']);
   assert.deepEqual(Object.keys(p.persistedEntries), ['one', 'two']);
-  assert.equal(p.entries.one, originalOne);
+  assert.deepEqual(JSON.parse(JSON.stringify(p.entries.one)), { ...originalOne, sortOrder: 1 });
+  assert.equal(p.entries.two.sortOrder, 0);
   assert.equal(p.keyDrafts.one, 'unsaved-key'); assert.equal(p.confirmations.one, true);
   assert.equal(card(tree).props['data-key-entry-expanded'], true);
   assert.equal(card(tree).key, 'one');
@@ -326,6 +327,30 @@ test('group handles reorder only the draft; retain key text, expanded cards and 
   assert.equal(card(tree).props['data-key-entry-dirty'], false);
   assert.equal(card(tree, 'two').props['data-key-entry-dirty'], false);
   assert.deepEqual(Object.keys(h.context.normalize(p.route, p.entries)), ['two', 'one']);
+});
+
+test('saved explicit group ranks survive remount, numeric IDs and reordered transport keys without dirtying untouched upgrades', () => {
+  const p = props(); p.entries = {
+    '2': { name: 'Second', apiKeyEnv: 'SECOND_KEY', models: [{ id: 'm2' }] },
+    '10': { name: 'Tenth', apiKeyEnv: 'TENTH_KEY', models: [{ id: 'm10' }] },
+  };
+  p.persistedEntries = structuredClone(p.entries);
+  let h = harness(), tree = h.render(p);
+  assert.equal(card(tree, '2').props['data-key-entry-dirty'], false);
+  assert.equal(Object.hasOwn(p.entries['2'], 'sortOrder'), false, 'opening legacy entries does not introduce an edit');
+  handleFor(tree, '10').props.onKeyDown(arrow('ArrowUp')); tree = h.render(p);
+  assert.equal(p.entries['10'].sortOrder, 0); assert.equal(p.entries['2'].sortOrder, 1);
+  const saved = JSON.parse(JSON.stringify(h.context.normalize(p.route, p.entries)));
+  // Object integer keys always enumerate 2,10 even after insertion in reverse.
+  assert.deepEqual(Object.keys(saved), ['2', '10']);
+  p.entries = saved; p.persistedEntries = structuredClone(saved);
+  h = harness(); tree = h.render(p);
+  const ids = flatten(tree).filter(n => n.props?.['data-key-entry-id']).map(n => n.props['data-key-entry-id']);
+  assert.deepEqual(ids, ['10', '2']);
+  assert.equal(card(tree, '10').props['data-key-entry-dirty'], false);
+  assert.equal(card(tree, '2').props['data-key-entry-dirty'], false);
+  handleFor(tree, '2').props.onKeyDown(arrow('ArrowUp')); tree = h.render(p);
+  assert.equal(p.entries['2'].sortOrder, 0); assert.equal(p.entries['10'].sortOrder, 1);
 });
 
 test('disabled or busy group handles and moves beyond list boundaries never alter draft order', () => {

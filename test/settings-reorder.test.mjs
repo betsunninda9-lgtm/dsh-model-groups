@@ -26,7 +26,7 @@ function fixture({ index = 1, nested = false, viewport = false } = {}) {
   const timers = new Map(), frames = new Map();
   let now = 0, sequence = 0;
   Object.assign(win, {
-    innerHeight: 300,
+    innerHeight: 300, innerWidth: 300,
     setTimeout(fn, delay) { const id = ++sequence; timers.set(id, { fn, at: now + delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame(fn) { const id = ++sequence; frames.set(id, fn); return id; },
@@ -46,7 +46,14 @@ function fixture({ index = 1, nested = false, viewport = false } = {}) {
     const pending = [...frames.values()]; frames.clear();
     for (const callback of pending) callback(now);
   }
-  const root = { parentElement: null };
+  const overlays = [];
+  doc.body = { appendChild(node) { overlays.push(node); } };
+  doc.createElement = tag => ({ tag, style: {}, attributes: {}, children: [],
+    setAttribute(key, value) { this.attributes[key] = value; },
+    appendChild(child) { this.children.push(child); },
+    remove() { const index = overlays.indexOf(this); if (index >= 0) overlays.splice(index, 1); }
+  });
+  const root = { parentElement: null, lang: 'zh-CN' };
   const scroller = { scrollTop: 100, scrollHeight: 900, clientHeight: 300, parentElement: root };
   Object.assign(doc, { defaultView: win, documentElement: root, scrollingElement: scroller });
   const list = {
@@ -83,6 +90,7 @@ function fixture({ index = 1, nested = false, viewport = false } = {}) {
   };
   const up = (x = lastX, y = lastY) => doc.emit('pointerup', pointer(x, y));
   function clean() {
+    assert.equal(overlays.length, 0, 'drop marker removed');
     assert.equal(doc.listenerCount, 0, 'document listeners removed');
     assert.equal(win.listenerCount, 0, 'window listeners removed');
     assert.equal(timers.size, 0, 'hold timer removed');
@@ -92,7 +100,7 @@ function fixture({ index = 1, nested = false, viewport = false } = {}) {
     assert.equal(rows[index].style.opacity, `opacity-${index}`);
     for (const row of rows) assert.equal(row.style.boxShadow, `shadow-${row.id}`, 'drop preview restored');
   }
-  return { doc, win, rows, candidates, list, scroller, handle, commits, gesture, pointer, start, move, up, advance, frame, timers, frames, clean };
+  return { overlays, doc, win, rows, candidates, list, scroller, handle, commits, gesture, pointer, start, move, up, advance, frame, timers, frames, clean };
 }
 
 test('the default 400ms hold previews a destination but commits only on pointerup', () => {
@@ -113,6 +121,23 @@ test('the default 400ms hold previews a destination but commits only on pointeru
   f.clean();
   f.up(); f.gesture.cancel();
   assert.deepEqual(f.commits, [-1], 'termination is idempotent');
+});
+
+test('a high-contrast labelled insertion line follows the drop edge without changing layout', () => {
+  const f = fixture(); f.start(); f.advance(400); f.move(150, 10);
+  assert.equal(f.overlays.length, 1);
+  let marker = f.overlays[0];
+  assert.equal(marker.style.position, 'fixed');
+  assert.equal(marker.style.pointerEvents, 'none');
+  assert.equal(marker.style.top, '2px');
+  assert.equal(marker.children[0].textContent, '松手后放在这里');
+  f.move(150, 290);
+  assert.equal(f.overlays.length, 1, 'old marker replaced instead of accumulating');
+  marker = f.overlays[0];
+  assert.equal(marker.style.top, '294px');
+  assert.equal(marker.children[0].style.top, '-30px');
+  f.move(341, 290); assert.equal(f.overlays.length, 0);
+  f.gesture.cancel(); f.clean();
 });
 
 test('pointerup resolves its final coordinates even when the browser delivers no final pointermove', () => {
