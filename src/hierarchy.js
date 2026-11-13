@@ -18,6 +18,17 @@ export function decodeKeyModelId(model) {
   } catch { return undefined; }
 }
 
+/** Explicit ranks survive host equality checks, schema parsing, and reloads.
+ * Unranked legacy/new entries retain their existing relative order at the end.
+ */
+export function orderedKeyEntries(entries) {
+  const rank = entry => Number.isSafeInteger(entry?.sortOrder) && entry.sortOrder >= 0 ? entry.sortOrder : Infinity;
+  return Object.entries(entries ?? {}).sort(([, left], [, right]) => {
+    const a = rank(left), b = rank(right);
+    return a === b ? 0 : a < b ? -1 : 1;
+  });
+}
+
 export function keyEntryGroupKey(provider, entryId) {
   return `@key/${encodeURIComponent(provider)}/${encodeURIComponent(entryId)}`;
 }
@@ -50,7 +61,7 @@ export function buildModelHierarchy(groups, providers, preferences, current = nu
     }
     const byEntry = new Map();
     const configured = profile?.keyEntries && typeof profile.keyEntries === 'object' ? profile.keyEntries : {};
-    for (const entryId of Object.keys(configured)) {
+    for (const [entryId] of orderedKeyEntries(configured)) {
       if (KEY_ENTRY_ID.test(entryId) && !forbiddenEntry(entryId)) byEntry.set(entryId, []);
     }
     for (const model of aliases) {
@@ -64,6 +75,17 @@ export function buildModelHierarchy(groups, providers, preferences, current = nu
     const children = [...byEntry].filter(([, models]) => models.length > 0).map(([entryId, models]) => {
       const key = keyEntryGroupKey(group.id, entryId);
       const active = root.current && selectedEntry === entryId;
+      // Catalog refreshes may use a different order from the saved editor rows.
+      // Empty lists inherit catalog order; unconfigured models stay stable last.
+      const configuredModels = Object.hasOwn(configured, entryId) ? configured[entryId]?.models : undefined;
+      if (Array.isArray(configuredModels) && configuredModels.length > 0) {
+        const order = new Map();
+        for (const model of configuredModels) {
+          if (typeof model?.id === 'string' && !order.has(model.id)) order.set(model.id, order.size);
+        }
+        const rank = model => order.get(decodeKeyModelId(model.id).modelId) ?? order.size;
+        models.sort((left, right) => rank(left) - rank(right));
+      }
       return { ...group, key, entryId, name: keyEntryName(providers, group.id, entryId), models, current: active,
         expanded: Object.hasOwn(preferences, key) ? preferences[key] : active };
     });

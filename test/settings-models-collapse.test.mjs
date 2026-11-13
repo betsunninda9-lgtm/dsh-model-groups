@@ -8,7 +8,7 @@ import { sha256, transformSource } from '../scripts/native-patches.mjs';
 // Evaluate the ACTUAL generated host functions, not a parallel implementation.
 // This tiny hook renderer preserves function-component hook slots across renders;
 // JSX children stay descriptors so mounting/visibility can be inspected directly.
-function harness() {
+function harness(component = 'Editor') {
   let cursor = 0, effects = [], slots = [], pending = false;
   const react = {
     useState(initial) {
@@ -36,10 +36,10 @@ function harness() {
     validateReasoningEfforts: () => undefined,
     ApiKeyInput: function ApiKeyInput() {}, ModelListEditor: function ModelListEditor() {},
   });
-  vm.runInContext(source.slice(start, end) + '\nthis.Editor = MultiKeyEntriesEditor;this.dirty = multiKeyEntryDirty;this.store = storeMultiKeyDrafts;this.normalize = normalizedMultiKeyEntries;this.validate = multiKeyFailure;this.createEntry = newMultiKeyEntry;', context);
+  vm.runInContext(source.slice(source.indexOf('function rowHalf(event)'), start) + source.slice(start, end) + '\nthis.Editor = MultiKeyEntriesEditor;this.RowEditor = ModelRow;this.RowsEditor = p => useModelRows(p.models,p.onChange,p.disabled);this.dirty = multiKeyEntryDirty;this.store = storeMultiKeyDrafts;this.normalize = normalizedMultiKeyEntries;this.validate = multiKeyFailure;this.createEntry = newMultiKeyEntry;', context);
   return { context, render(props) {
     let tree, rounds = 0;
-    do { pending = false; cursor = 0; effects = []; tree = context.Editor(props); for (const fn of effects) fn(); if (++rounds > 20) throw new Error('Hook render loop'); } while (pending);
+    do { pending = false; cursor = 0; effects = []; tree = context[component](props); for (const fn of effects) fn(); if (++rounds > 20) throw new Error('Hook render loop'); } while (pending);
     return tree;
   } };
 }
@@ -62,7 +62,7 @@ function props() {
 }
 
 test('generated shipped settings patch is hash locked, current and reversible in memory', () => {
-  assert.equal(artifact.variants.length, 2);
+  assert.equal(artifact.variants.length, 4);
   assert.equal(artifact.current, true);
   const stable = JSON.parse(fs.readFileSync(new URL('fixtures/settings-models/v0.3.5.json', import.meta.url), 'utf8'));
   assert.deepEqual(artifact.variants[0].replacements, stable.replacements);
@@ -292,4 +292,101 @@ test('existing footer remains the only commit interface and becomes offset stick
   assert.equal((source.match(/function EditorFooter\(/g) ?? []).length, 1);
   assert.equal((source.match(/setEntrySaveState\(\{ ok:/g) ?? []).length, 4);
   assert.equal(source.includes('credentials/get'), previous.includes('credentials/get'));
+});
+
+const arrow = key => ({ key, preventDefault() {}, stopPropagation() {} });
+const handleFor = (tree, id) => get(tree, n => n.props?.['data-key-entry-handle'] === id);
+
+test('group handles reorder only the draft; retain key text, expanded cards and stable identities until native save', () => {
+  const h = harness(), p = props();
+  p.entries.two = { name: 'Second', apiKeyEnv: 'OTHER_KEY', models: [{ id: 'second' }] };
+  p.persistedEntries = structuredClone(p.entries);
+  p.keyDrafts = { one: 'unsaved-key' }; p.confirmations = { one: true };
+  let tree = h.render(p); toggle(tree).props.onClick(); tree = h.render(p);
+  const originalOne = p.entries.one;
+  const handle = handleFor(tree, 'two');
+  assert.equal(handle.props.style.minWidth, 44);
+  assert.equal(handle.props.draggable, false);
+  handle.props.onKeyDown(arrow('ArrowUp')); tree = h.render(p);
+  assert.deepEqual(Object.keys(p.entries), ['two', 'one']);
+  assert.deepEqual(Object.keys(p.persistedEntries), ['one', 'two']);
+  assert.deepEqual(JSON.parse(JSON.stringify(p.entries.one)), { ...originalOne, sortOrder: 1 });
+  assert.equal(p.entries.two.sortOrder, 0);
+  assert.equal(p.keyDrafts.one, 'unsaved-key'); assert.equal(p.confirmations.one, true);
+  assert.equal(card(tree).props['data-key-entry-expanded'], true);
+  assert.equal(card(tree).key, 'one');
+  assert.equal(card(tree).props['data-key-entry-dirty'], true);
+  assert.equal(card(tree, 'two').props['data-key-entry-dirty'], true);
+  // Failed save retains draft order and does not mark it saved.
+  p.saveState = { ok: false, entries: structuredClone(p.entries) }; tree = h.render(p);
+  assert.deepEqual(Object.keys(p.entries), ['two', 'one']);
+  assert.equal(card(tree, 'two').props['data-key-entry-dirty'], true);
+  p.keyDrafts.one = '';
+  p.saveState = { ok: true, entries: structuredClone(p.entries) }; p.savedEntries = p.saveState.entries;
+  tree = h.render(p);
+  assert.equal(card(tree).props['data-key-entry-dirty'], false);
+  assert.equal(card(tree, 'two').props['data-key-entry-dirty'], false);
+  assert.deepEqual(Object.keys(h.context.normalize(p.route, p.entries)), ['two', 'one']);
+});
+
+test('saved explicit group ranks survive remount, numeric IDs and reordered transport keys without dirtying untouched upgrades', () => {
+  const p = props(); p.entries = {
+    '2': { name: 'Second', apiKeyEnv: 'SECOND_KEY', models: [{ id: 'm2' }] },
+    '10': { name: 'Tenth', apiKeyEnv: 'TENTH_KEY', models: [{ id: 'm10' }] },
+  };
+  p.persistedEntries = structuredClone(p.entries);
+  let h = harness(), tree = h.render(p);
+  assert.equal(card(tree, '2').props['data-key-entry-dirty'], false);
+  assert.equal(Object.hasOwn(p.entries['2'], 'sortOrder'), false, 'opening legacy entries does not introduce an edit');
+  handleFor(tree, '10').props.onKeyDown(arrow('ArrowUp')); tree = h.render(p);
+  assert.equal(p.entries['10'].sortOrder, 0); assert.equal(p.entries['2'].sortOrder, 1);
+  const saved = JSON.parse(JSON.stringify(h.context.normalize(p.route, p.entries)));
+  // Object integer keys always enumerate 2,10 even after insertion in reverse.
+  assert.deepEqual(Object.keys(saved), ['2', '10']);
+  p.entries = saved; p.persistedEntries = structuredClone(saved);
+  h = harness(); tree = h.render(p);
+  const ids = flatten(tree).filter(n => n.props?.['data-key-entry-id']).map(n => n.props['data-key-entry-id']);
+  assert.deepEqual(ids, ['10', '2']);
+  assert.equal(card(tree, '10').props['data-key-entry-dirty'], false);
+  assert.equal(card(tree, '2').props['data-key-entry-dirty'], false);
+  handleFor(tree, '2').props.onKeyDown(arrow('ArrowUp')); tree = h.render(p);
+  assert.equal(p.entries['2'].sortOrder, 0); assert.equal(p.entries['10'].sortOrder, 1);
+});
+
+test('disabled or busy group handles and moves beyond list boundaries never alter draft order', () => {
+  const h = harness(), p = props(); p.entries.two = { name: 'Second', models: [{ id: 'second' }] };
+  let tree = h.render(p);
+  handleFor(tree, 'one').props.onKeyDown(arrow('ArrowUp'));
+  handleFor(tree, 'two').props.onKeyDown(arrow('ArrowDown'));
+  assert.deepEqual(Object.keys(p.entries), ['one', 'two']);
+  p.disabled = true; tree = h.render(p);
+  handleFor(tree, 'two').props.onKeyDown(arrow('ArrowUp'));
+  p.disabled = false; tree = h.render(p); model(tree).props.onBusyChange(true); tree = h.render(p);
+  assert.equal(handleFor(tree, 'two').props.disabled, true);
+  handleFor(tree, 'two').props.onKeyDown(arrow('ArrowUp'));
+  assert.deepEqual(Object.keys(p.entries), ['one', 'two']);
+});
+
+test('native model reorder keeps expanded fields, raw capacity drafts, unknown metadata and row keys attached', () => {
+  const h = harness('RowsEditor');
+  const p = { models: [{ id: 'one', hidden: { x: 1 } }, { id: 'two' }, { id: '' }], onChange: next => { p.models = next; } };
+  let state = h.render(p); const key = state.rows[0].key;
+  state.toggle(0); state = h.render(p); state.edit(0, 'maxTokens', '12x'); state = h.render(p);
+  state.rows[0].order.onMove(2); state = h.render(p);
+  assert.deepEqual(Array.from(p.models, m => m.id), ['two', '', 'one']);
+  assert.equal(state.rows[2].key, key); assert.equal(state.rows[2].expanded, true);
+  assert.equal(state.rows[2].editing.get('maxTokens'), '12x');
+  assert.deepEqual(p.models[2].hidden, { x: 1 });
+  p.disabled = true; state = h.render(p); state.rows[2].order.onMove(-2);
+  assert.deepEqual(Array.from(p.models, m => m.id), ['two', '', 'one']);
+});
+
+test('actual model handle uses the shared pointer gesture and native row movement with keyboard fallback', () => {
+  const h = harness('RowEditor'), moves = [];
+  const p = { model: { id: 'm' }, position: 1, rowKey: 12, t: x => x, order: { onMove: n => moves.push(n) }, contextWindow: {}, maxTokens: {} };
+  const tree = h.render(p), handle = get(tree, n => n.type === 'button' && n.props['aria-keyshortcuts']);
+  assert.equal(handle.props.style.touchAction, 'none'); assert.equal(handle.props.style.minHeight, 44);
+  assert.equal(handle.props.draggable, false); assert.equal(typeof handle.props.onPointerDown, 'function');
+  assert.equal(handle.props.onDragStart, undefined);
+  handle.props.onKeyDown(arrow('ArrowDown')); assert.deepEqual(moves, [1]);
 });

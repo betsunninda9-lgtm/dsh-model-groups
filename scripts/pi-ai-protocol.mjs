@@ -11,11 +11,11 @@ export function protocolReplacements() {
   return [
     {
       before: '\tapiKeyEnv: z.string().role("credential-ref").required(),\n\tmodels: z.array(modelProfile).required()\n});',
-      after: '\tapiKeyEnv: z.string().role("credential-ref").required(),\n\tapi: z.union(supportedProtocols()),\n\tmodels: z.array(modelProfile).required()\n});',
+      after: '\tapiKeyEnv: z.string().role("credential-ref").required(),\n\tapi: z.union(supportedProtocols()),\n\tsortOrder: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER),\n\tmodels: z.array(modelProfile).required()\n});',
     },
     {
       before: '\t\t\tcredentialRef(entry.apiKeyEnv);\n\t\t\tif (!Array.isArray(entry.models))',
-      after: '\t\t\tcredentialRef(entry.apiKeyEnv);\n\t\t\tif (entry.api !== void 0 && !supportedProtocols().includes(entry.api)) throw new Error(`llm-pi-ai: provider "${provider}" key entry "${id}" api must be a supported protocol`);\n\t\t\tif (!Array.isArray(entry.models))',
+      after: '\t\t\tcredentialRef(entry.apiKeyEnv);\n\t\t\tif (entry.api !== void 0 && !supportedProtocols().includes(entry.api)) throw new Error(`llm-pi-ai: provider "${provider}" key entry "${id}" api must be a supported protocol`);\n\t\t\tif (entry.sortOrder !== void 0 && (!Number.isSafeInteger(entry.sortOrder) || entry.sortOrder < 0)) throw new Error(`llm-pi-ai: provider "${provider}" key entry "${id}" sortOrder must be a nonnegative safe integer`);\n\t\t\tif (!Array.isArray(entry.models))',
     },
     {
       before: '\t\t\tconst child = resolveProfiles({ [provider]: {\n\t\t\t\t...source,\n\t\t\t\tmultiKey: false,',

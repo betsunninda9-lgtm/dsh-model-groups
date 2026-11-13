@@ -1,0 +1,255 @@
+		function rowHalf(event) {
+			const rect = event.currentTarget.getBoundingClientRect();
+			return event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+		}
+		/**
+		* Render model fields with the display name in the expanded area of narrow rows.
+		* @param props - drafted fields and their owning editor's actions.
+		* @returns one expandable model entry.
+		*/
+		function ModelRow(props) {
+			const { model, position, t, disabled } = props;
+			const preview = (0, _deepseek_ai_dsh_client_ui_primitives.useRowDragPreview)(ModelsSection_module_css_default["modelDragPreview"]);
+			const modelField = (field) => (0, react_jsx_runtime.jsxs)("label", {
+				className: `${ModelsSection_module_css_default["modelField"]} ${field === "name" ? ModelsSection_module_css_default["modelName"] : ""}`,
+				children: [field === "name" ? (0, react_jsx_runtime.jsx)("span", {
+					className: `${ModelsSection_module_css_default["modelFieldLabel"]} ${ModelsSection_module_css_default["modelNameLabel"]}`,
+					children: t("modelName")
+				}) : null, (0, react_jsx_runtime.jsx)("input", {
+					className: ModelsSection_module_css_default["input"],
+					type: "text",
+					value: typeof model[field] === "string" ? model[field] : "",
+					placeholder: t(field === "id" ? "modelId" : "modelName"),
+					"aria-label": `${t(field === "id" ? "modelId" : "modelName")} ${String(position)}`,
+					disabled,
+					onFocus: field === "name" && !props.expanded ? props.onToggle : void 0,
+					onChange: (event) => {
+						const value = event.target.value;
+						props.onFieldChange(field, field === "name" && value === "" ? void 0 : value);
+					},
+					onBlur: field === "id" ? (event) => props.onIdBlur?.(event.target.value) : void 0
+				})]
+			});
+			return (0, react_jsx_runtime.jsx)("div", {
+				className: ModelsSection_module_css_default["modelEntry"],
+				"data-row-key": props.rowKey,
+				"data-dragging": props.order.dragging || void 0,
+				"data-drop-target": props.order.dragging ? void 0 : props.order.target,
+				onDragOver: (event) => {
+					if (!props.order.canDrop) return;
+					event.preventDefault();
+					event.dataTransfer.dropEffect = "move";
+					props.order.onOver(rowHalf(event));
+				},
+				onDragLeave: (event) => {
+					if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+					props.order.onLeave();
+				},
+				onDrop: (event) => {
+					if (!props.order.canDrop) return;
+					event.preventDefault();
+					props.order.onDrop(rowHalf(event));
+				},
+				children: (0, react_jsx_runtime.jsxs)("div", {
+					className: ModelsSection_module_css_default["modelRow"],
+					"data-expanded": props.expanded || void 0,
+					children: [
+						(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+							label: t("reorderModelHelp"),
+							portal: true,
+							children: (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: `${ModelsSection_module_css_default["iconButton"]} ${ModelsSection_module_css_default["modelDragHandle"]}`,
+								"aria-label": `${t("reorderModel")} ${String(position)}`,
+								"aria-keyshortcuts": "ArrowUp ArrowDown",
+								"aria-description": t("reorderModelHelp"),
+								disabled,
+								draggable: !disabled,
+								onDragStart: (event) => {
+									event.dataTransfer.effectAllowed = "move";
+									event.dataTransfer.setData("application/x-dsh-model-order", String(position));
+									props.order.onStart();
+									preview.start(event, event.currentTarget.closest("[data-row-key]"));
+								},
+								onDragEnd: () => {
+									if (preview.clear()) props.order.onEnd();
+								},
+								onKeyDown: (event) => {
+									if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+									event.preventDefault();
+									event.stopPropagation();
+									props.order.onMove(event.key === "ArrowUp" ? -1 : 1);
+								},
+								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDragHandleOutlineRegular, { size: 14 })
+							})
+						}),
+						modelField("id"),
+						(0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: ModelsSection_module_css_default["iconButton"],
+							"aria-label": `${t("modelAdvanced")} ${String(position)}`,
+							"aria-expanded": props.expanded,
+							title: t("modelAdvanced"),
+							onClick: (event) => {
+								event.currentTarget.focus();
+								props.onToggle();
+							},
+							children: props.expanded ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronRightOutlineRegular, {})
+						}),
+						(0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: `${ModelsSection_module_css_default["iconButton"]} ${ModelsSection_module_css_default["iconButtonDanger"]}`,
+							"aria-label": `${t("removeModel")} ${String(position)}`,
+							title: t("removeModel"),
+							disabled,
+							onClick: props.onRemove,
+							children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, { size: 14 })
+						}),
+						modelField("name"),
+						props.expanded ? (0, react_jsx_runtime.jsxs)("div", {
+							className: ModelsSection_module_css_default["modelAdvanced"],
+							children: [
+								["contextWindow", "maxTokens"].map((field) => (0, react_jsx_runtime.jsxs)("label", {
+									className: ModelsSection_module_css_default["modelField"],
+									children: [(0, react_jsx_runtime.jsx)("span", {
+										className: ModelsSection_module_css_default["modelFieldLabel"],
+										children: t(field)
+									}), (0, react_jsx_runtime.jsx)("input", {
+										className: ModelsSection_module_css_default["input"],
+										type: "text",
+										inputMode: "numeric",
+										value: props[field].value,
+										placeholder: props[field].placeholder,
+										"aria-label": `${t(field)} ${String(position)}`,
+										disabled,
+										onChange: (event) => {
+											props[field].onChange(event.target.value);
+										},
+										onBlur: props[field].onBlur
+									})]
+								}, field)),
+								(0, react_jsx_runtime.jsx)(ModelInputTypes, {
+									model,
+									field: props.inputField,
+									position,
+									fallback: props.inputFallback,
+									disabled: disabled || props.inputLoading === true,
+									t,
+									onChange: props.onChange
+								}),
+								props.reasoningLevels !== void 0 && props.reasoningLevels.length > 0 ? (0, react_jsx_runtime.jsx)(ModelReasoningEfforts, {
+									model,
+									levels: props.reasoningLevels,
+									position,
+									disabled,
+									t,
+									onChange: props.onChange
+								}) : null
+							]
+						}) : null
+					]
+				})
+			});
+		}
+		//#endregion
+		//#region lib/types/client/useModelRows.js
+		/** Local model-row identities, disclosures, capacity text, and draft ordering. */
+		/** One editor-local identity; editing a model ID never replaces its controls. */
+		function createRow(key) {
+			return {
+				key,
+				expanded: false,
+				editing: /* @__PURE__ */ new Map()
+			};
+		}
+		/**
+		* Keep row state with its model through draft moves and removals.
+		* @param models - current draft array, owned by the provider card.
+		* @param onChange - replaces only that card's draft array.
+		* @param disabled - prevents reordering while the card cannot be edited.
+		* @returns row state and local editing and ordering actions.
+		*/
+		function useModelRows(models, onChange, disabled) {
+			const nextKey = (0, react.useRef)(0);
+			const [stored, setRows] = (0, react.useState)(() => models.map(() => createRow(nextKey.current++)));
+			const [dragged, setDragged] = (0, react.useState)();
+			const [target, setTarget] = (0, react.useState)();
+			const entries = models.map((model, index) => ({
+				model,
+				state: stored[index] ?? createRow(nextKey.current++)
+			}));
+			const rows = entries.map((entry) => entry.state);
+			if (stored.length !== models.length) setRows(rows);
+			const endDrag = () => {
+				setDragged(void 0);
+				setTarget(void 0);
+			};
+			const move = (from, to) => {
+				if (disabled || from === to || from < 0 || to < 0 || to >= models.length) return;
+				const order = [...entries];
+				const moved = order.splice(from, 1);
+				order.splice(to, 0, ...moved);
+				setRows(order.map((entry) => entry.state));
+				onChange(order.map((entry) => entry.model));
+			};
+			return {
+				rows: entries.map(({ model, state }, index) => ({
+					...state,
+					model,
+					order: {
+						dragging: dragged === state.key,
+						target: target?.key === state.key ? target.half : void 0,
+						canDrop: !disabled && dragged !== void 0,
+						onStart: () => {
+							setDragged(state.key);
+						},
+						onEnd: endDrag,
+						onOver: (half) => {
+							setTarget((current) => current?.key === state.key && current.half === half ? current : {
+								key: state.key,
+								half
+							});
+						},
+						onLeave: () => {
+							setTarget((current) => current?.key === state.key ? void 0 : current);
+						},
+						onDrop: (half) => {
+							const from = rows.findIndex((row) => row.key === dragged);
+							const insertion = index + (half === "after" ? 1 : 0);
+							move(from, insertion > from ? insertion - 1 : insertion);
+							endDrag();
+						},
+						onMove: (offset) => {
+							move(index, index + offset);
+						}
+					}
+				})),
+				toggle: (index) => {
+					setRows(rows.map((row, at) => at === index ? {
+						...row,
+						expanded: !row.expanded
+					} : row));
+				},
+				edit: (index, field, text) => {
+					setRows(rows.map((row, at) => {
+						if (at !== index) return row;
+						const editing = new Map(row.editing);
+						if (text === void 0) editing.delete(field);
+						else editing.set(field, text);
+						return {
+							...row,
+							editing
+						};
+					}));
+				},
+				forget: (removed) => {
+					setRows(rows.filter((_row, index) => !removed.has(index)));
+					endDrag();
+				},
+				reset: () => {
+					setRows(models.map(() => createRow(nextKey.current++)));
+					endDrag();
+				}
+			};
+		}
+		//#endregion
