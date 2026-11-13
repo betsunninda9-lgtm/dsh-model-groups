@@ -29,7 +29,7 @@ export function ModelGroupsSettingsPage() {
   return h('section', { className: 'mg-maintenance', 'aria-label': '模型分组设置', 'aria-busy': state.busy },
     h('h2', null, '多密钥管理'),
     h('p', null, '在这里启用、更新或关闭多密钥。如果只想按供应商浏览模型，无需启用多密钥。'),
-    snapshot?.pluginVersion && h('p', { className: 'mg-maintenance-help' }, `插件 ${snapshot.pluginVersion} · DSH ${snapshot.compatibility?.hostVersion ?? '版本未确认'}`),
+    h('p', { className: 'mg-maintenance-help' }, `网页插件 ${MODEL_GROUPS_CLIENT_VERSION} · 后端插件 ${snapshot?.pluginVersion ?? '检查中'} · DSH ${snapshot?.compatibility?.hostVersion ?? '版本未确认'}`),
     h('section', { className: 'mg-maintenance-card', 'aria-label': '当前状态' },
       h('div', { className: 'mg-maintenance-row' }, h('h3', null, '当前状态'), h('button', { type: 'button', disabled: state.busy, onClick: refresh }, state.busy ? '处理中…' : '刷新检查')),
       h('p', { role: 'status', 'aria-live': 'polite', className: 'mg-maintenance-help' }, state.busy ? '正在检查或执行维护，请勿关闭或重复操作。' : snapshot ? statusLabel : '尚无可验证状态，请刷新检查。'),
