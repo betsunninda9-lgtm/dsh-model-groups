@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { sha256, transformSource } from './native-patches.mjs';
+import { addSettingsReorder } from './settings-reorder-patch.mjs';
 
 const root = new URL('../', import.meta.url);
 const readArtifact = file => JSON.parse(fs.readFileSync(new URL(file, root), 'utf8'));
@@ -15,7 +16,7 @@ if (sourceArg >= 0 && !sourcePath) throw new Error('--source requires a pristine
 // a focused legacy fixture; generation/check requires a read-only pristine input.
 const base = fullSource ? fs.readFileSync(sourcePath, 'utf8') : undefined;
 if (fullSource && sha256(base) !== legacy.baseSha256) throw new Error('Pristine settings host hash mismatch');
-const previous = fullSource ? transformSource(base, legacy) : fs.readFileSync(new URL('test/fixtures/settings-models/editor-beta5.js.txt', root), 'utf8');
+const previous = fullSource ? transformSource(base, legacy) : fs.readFileSync(new URL('test/fixtures/settings-models/model-rows.js.txt', root), 'utf8') + fs.readFileSync(new URL('test/fixtures/settings-models/editor-beta5.js.txt', root), 'utf8');
 const delta = [];
 let current = previous;
 function replace(before, after) {
@@ -205,11 +206,14 @@ for (const [locale, values] of Object.entries(translations)) {
   const lines = Object.entries(values).map(([key, value]) => `\t\t\t${key}: ${JSON.stringify(value)},\n`).join('');
   replace(`const ${locale} = {\n`, `const ${locale} = {\n${lines}`);
 }
+addSettingsReorder(current, replace);
 const shipped = readArtifact('native/settings-models.patch.json');
+const previousStable = readArtifact('test/fixtures/settings-models/v0.3.8.json');
 const variant = item => ({ baseSha256: item.baseSha256, resultSha256: item.resultSha256, replacements: item.replacements });
-const artifact = { ...legacy, current: true, resultSha256: fullSource ? sha256(current) : shipped.resultSha256, replacements: [...legacy.replacements, ...delta], variants: [variant(stable), variant(legacy), ...(legacy.variants ?? [])] };
+const artifact = { ...legacy, current: true, resultSha256: fullSource ? sha256(current) : shipped.resultSha256, replacements: [...legacy.replacements, ...delta], variants: [variant(stable), variant(legacy), variant(previousStable), ...(legacy.variants ?? [])] };
 // Validate full generated JavaScript BEFORE writing the distributable patch.
 new Function(current);
+if (fullSource && (transformSource(base, artifact) !== current || transformSource(current, artifact, true) !== base)) throw new Error('Settings patch roundtrip mismatch');
 export { artifact, base, current as source, previous };
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!fullSource) throw new Error('Generation/check requires --source <pristine-host-file>; no installed files are read implicitly');

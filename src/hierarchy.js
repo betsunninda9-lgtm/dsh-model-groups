@@ -64,6 +64,17 @@ export function buildModelHierarchy(groups, providers, preferences, current = nu
     const children = [...byEntry].filter(([, models]) => models.length > 0).map(([entryId, models]) => {
       const key = keyEntryGroupKey(group.id, entryId);
       const active = root.current && selectedEntry === entryId;
+      // Catalog refreshes may use a different order from the saved editor rows.
+      // Empty lists inherit catalog order; unconfigured models stay stable last.
+      const configuredModels = Object.hasOwn(configured, entryId) ? configured[entryId]?.models : undefined;
+      if (Array.isArray(configuredModels) && configuredModels.length > 0) {
+        const order = new Map();
+        for (const model of configuredModels) {
+          if (typeof model?.id === 'string' && !order.has(model.id)) order.set(model.id, order.size);
+        }
+        const rank = model => order.get(decodeKeyModelId(model.id).modelId) ?? order.size;
+        models.sort((left, right) => rank(left) - rank(right));
+      }
       return { ...group, key, entryId, name: keyEntryName(providers, group.id, entryId), models, current: active,
         expanded: Object.hasOwn(preferences, key) ? preferences[key] : active };
     });

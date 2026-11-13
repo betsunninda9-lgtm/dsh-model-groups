@@ -136,6 +136,53 @@ test('manual key entries are not capped or merged, preserve order, and leave inp
   assert.equal(JSON.stringify({ catalog, config }), before);
 });
 
+test('saved key and model row order wins over catalog order without changing selection or input data', () => {
+  const reordered = { ...providers, provider: { multiKey: true, keyEntries: {
+    backup: { ...providers.provider.keyEntries.backup, models: [{ id: 'vendor/shared' }] },
+    primary: { ...providers.provider.keyEntries.primary, models: [{ id: 'alpha' }, { id: 'vendor/shared' }] },
+  } } };
+  const before = JSON.stringify({ groups, reordered });
+  const tree = buildModelHierarchy(groups, reordered, { [primaryKey]: true, [backupKey]: true }, current);
+  assert.deepEqual(tree[0].children.map(child => child.entryId), ['backup', 'primary']);
+  assert.deepEqual(tree[0].children.map(child => child.models.map(model => model.id)), [[backup], [alpha, primary]]);
+  assert.deepEqual(visibleHierarchyModels(tree), [route(backup), route(alpha), route(primary)]);
+  assert.equal(tree[0].children[1].current, true);
+  assert.equal(JSON.stringify({ groups, reordered }), before);
+});
+
+test('unconfigured catalog models stay stable after configured rows and missing rows are not invented', () => {
+  const catalog = [{ id: 'provider', models: [
+    { id: alias('primary', 'unknown-b') }, { id: primary },
+    { id: alias('primary', 'unknown-a') }, { id: alpha },
+  ] }];
+  const config = { provider: { multiKey: true, keyEntries: { primary: {
+    models: [{ id: 'absent' }, { id: 'alpha' }, { id: 'vendor/shared' }, { id: 'alpha' }],
+  } } } };
+  const tree = buildModelHierarchy(catalog, config, {}, current);
+  assert.deepEqual(tree[0].children[0].models.map(model => model.id), [
+    alpha, primary, alias('primary', 'unknown-b'), alias('primary', 'unknown-a'),
+  ]);
+  assert.equal(tree[0].modelCount, 4);
+});
+
+test('model ordering is isolated by provider and key entry; empty lists inherit catalog order', () => {
+  const catalog = ['one', 'two'].map(id => ({ id, models: [
+    { id: alias('shared', 'first') }, { id: alias('shared', 'second') },
+    { id: alias('inherited', 'first') }, { id: alias('inherited', 'second') },
+  ] }));
+  const config = {
+    one: { multiKey: true, keyEntries: { shared: { models: [{ id: 'second' }, { id: 'first' }] }, inherited: { models: [] } } },
+    two: { multiKey: true, keyEntries: { shared: { models: [{ id: 'first' }, { id: 'second' }] }, inherited: {} } },
+  };
+  const tree = buildModelHierarchy(catalog, config, {});
+  assert.deepEqual(tree.map(root => root.children.map(child => child.models.map(model => decodeKeyModelId(model.id).modelId))), [
+    [['second', 'first'], ['first', 'second']],
+    [['first', 'second'], ['first', 'second']],
+  ]);
+  const loading = buildModelHierarchy(catalog, undefined, {});
+  assert.deepEqual(loading[0].children[0].models.map(model => decodeKeyModelId(model.id).modelId), ['first', 'second']);
+});
+
 test('canonical alias decoding accepts encoded wire IDs but rejects alternate spellings, malformed and reserved entry IDs', () => {
   assert.equal(KEY_MODEL_PREFIX, '@dsh-key/');
   assert.deepEqual(decodeKeyModelId(alias('entry-1', 'vendor/model β?version=1')), { entryId: 'entry-1', modelId: 'vendor/model β?version=1' });
