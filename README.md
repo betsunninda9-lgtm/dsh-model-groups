@@ -4,6 +4,16 @@
 
 支持 **DSH `0.2.2-rc.1`**、**Node.js 22 或更新版本**。本插件适用于 DSH 网页端，不替换原生 App 的模型菜单。
 
+## 本次更新 · 0.3.9
+
+- **手机也能排序**：在设置页长按三横线手柄约 400 毫秒，即可调整密钥分组及组内模型顺序；蓝色插入线会提示落点，靠近边缘可自动滚动。
+- **保存后顺序保留**：使用原表单保存按钮，退出再进入设置、打开聊天模型菜单都沿用已保存顺序。未保存的输入和展开状态会保留。
+- **修复测试版排序回退**，并分别显示插件前端、后端版本，方便核对更新。
+
+升级到本版后，需要在 **设置 → 模型分组** 更新多密钥补丁，再重启 DSH 引擎并刷新网页。
+
+查看 [每次更新的内容](CHANGELOG.md) · [GitHub 发布记录与安装包](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases)。
+
 ## 安装
 
 在运行 DSH 的环境里执行（如果你使用的 DSH 配置不是 `web`，把命令中的 `web` 换成你的配置名）：
@@ -12,7 +22,7 @@
 dsh plugin --profile web add dsh-model-groups@latest --registry=https://registry.npmjs.org/
 ```
 
-如果 npm 尚未同步到你需要的版本，可以把 `dsh-model-groups@latest` 换成 [GitHub 0.3.8 正式版安装包](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.8/dsh-model-groups-0.3.8.tgz) 的下载地址。安装后，**重启正在使用的 DSH 引擎，再刷新网页**。只想给现有模型分组？装好就可以用，不需要启用多密钥。
+如果 npm 尚未同步到你需要的版本，可以把 `dsh-model-groups@latest` 换成 [GitHub 0.3.9 正式版安装包](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.9/dsh-model-groups-0.3.9.tgz) 的下载地址。安装后，**重启正在使用的 DSH 引擎，再刷新网页**。只想给现有模型分组？装好就可以用，不需要启用多密钥。
 
 ## 在对话中选模型
 
