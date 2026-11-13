@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sha256, transformSource } from '../scripts/native-patches.mjs';
 import { buildProtocolArtifact, protocolReplacements } from '../scripts/pi-ai-protocol.mjs';
 import { buildModelHierarchy } from '../src/hierarchy.js';
+import { applyCapabilityBatch, materializeCapabilityEntry, mergeCapabilityModels } from '../src/capability-defaults.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const artifact = JSON.parse(fs.readFileSync(path.join(root, 'native/pi-ai.patch.json'), 'utf8'));
@@ -142,6 +143,13 @@ test('every released pi-ai revision keeps its exact hashes and original reversib
     assert.deepEqual(retained.replacements, old.replacements);
     assert.notEqual(retained.current, true);
   }
+  const capabilityBeta1 = JSON.parse(fs.readFileSync(path.join(root, 'test/fixtures/pi-ai/v0.3.10-beta.1.json'), 'utf8'));
+  for (const old of revisions(capabilityBeta1)) {
+    const retained = all.find(value => value.resultSha256 === old.resultSha256);
+    assert.ok(retained, 'capability beta1 must remain directly reversible');
+    assert.deepEqual(retained.replacements, old.replacements);
+    assert.notEqual(retained.current, true);
+  }
   const beta1 = JSON.parse(fs.readFileSync(path.join(root, 'test/fixtures/pi-ai/v0.3.9-beta.1.json'), 'utf8'));
   for (const old of revisions(beta1)) {
     const retained = all.find(value => value.resultSha256 === old.resultSha256);
@@ -225,6 +233,45 @@ for (const revision of current) {
     }
     assert.equal(module.keyEntryProfile.dict.sortOrder.meta.required, undefined);
   });
+  test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: batch metadata never forces existing raw capabilities and legacy migration preserves runtime`, { skip: !enabled }, async () => {
+    const module = runtime(transformSource(pristine, revision), { provider: 'gateway', input: ['text', 'image'], reasoning: true });
+    const providers = config();
+    providers.gateway.keyEntries = { batch: { name: 'Batch', apiKeyEnv: 'BATCH_KEY', capabilityBatch: { vision: true, reasoning: true }, models: [{ id: 'catalog-model', input: ['text'], reasoningEfforts: false }] } };
+    const checked = schemaProviders(module, providers);
+    assert.deepEqual(checked.gateway.keyEntries.batch.capabilityBatch, { vision: true, reasoning: true });
+    let profiles = module.resolveProfiles(checked);
+    const adapter = new module.PiAiAdapter({ profiles: () => profiles, resolveApiKey: async () => 'offline-key' });
+    const selected = module.keyModelId('batch', 'catalog-model');
+    let info = await adapter.resolveModel('gateway', selected);
+    assert.deepEqual(info.inputModalities, ['text']);
+    assert.equal(info.reasoning, undefined, 'individual raw edits beat remembered batch ON');
+    const batched = applyCapabilityBatch(checked.gateway.keyEntries.batch, 'reasoning', false);
+    assert.deepEqual(batched.models[0].input, ['text']);
+    assert.equal(batched.models[0].reasoningEfforts, false);
+    const nativeOn = applyCapabilityBatch(checked.gateway.keyEntries.batch, 'reasoning', true);
+    const nativeOff = mergeCapabilityModels(nativeOn, nativeOn.models.map(({ reasoningEfforts, ...model }) => model));
+    providers.gateway.keyEntries.batch = nativeOff;
+    profiles = module.resolveProfiles(schemaProviders(module, providers));
+    assert.equal((await adapter.resolveModel('gateway', selected)).reasoning, undefined, 'original native OFF stays disabled despite catalog capability');
+    const legacy = { name: 'Legacy', apiKeyEnv: 'LEGACY_KEY', capabilityDefaults: { vision: true, reasoning: true }, models: [{ id: 'catalog-model', capabilityOverrides: { vision: false } }] };
+    providers.gateway.keyEntries = { batch: legacy };
+    profiles = module.resolveProfiles(schemaProviders(module, providers));
+    const before = await adapter.resolveModel('gateway', selected);
+    providers.gateway.keyEntries.batch = materializeCapabilityEntry(legacy);
+    profiles = module.resolveProfiles(schemaProviders(module, providers));
+    assert.deepEqual(await adapter.resolveModel('gateway', selected), before, 'beta1 migration changes metadata without changing actual model behavior');
+    const yaml = require('yaml');
+    const restored = schemaProviders(module, yaml.parse(yaml.stringify({ providers })).providers);
+    assert.equal(restored.gateway.keyEntries.batch.capabilityDefaults, undefined);
+    assert.deepEqual(restored.gateway.keyEntries.batch.capabilityBatch, { vision: true, reasoning: true });
+    for (const batch of [null, [], { vision: undefined }, { vision: 'true' }, { reasoning: null }, { other: true }]) for (const multiKey of [true, false]) {
+      const invalid = config({ multiKey }); invalid.gateway.keyEntries.inherited.capabilityBatch = batch;
+      assert.throws(() => module.resolveProfiles(invalid, 'deferred'), /capabilityBatch/);
+    }
+    const partial = config(); partial.gateway.keyEntries.inherited.capabilityBatch = { vision: false };
+    assert.deepEqual(schemaProviders(module, partial).gateway.keyEntries.inherited.capabilityBatch, { vision: false }, 'untouched reasoning key stays absent');
+  });
+
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: group capability policy reaches schema, catalog and actual dispatch`, { skip: !enabled }, async () => {
     const module = runtime(transformSource(pristine, revision), { provider: 'gateway', input: ['text', 'image'], reasoning: true, thinkingLevelMap: { low: 'catalog-low', medium: 'catalog-mid', high: 'catalog-high' } });
     const providers = config();

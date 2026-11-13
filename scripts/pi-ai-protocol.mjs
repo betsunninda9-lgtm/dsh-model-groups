@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256, transformSource } from './native-patches.mjs';
-import { applyModelCapabilities } from '../src/capability-defaults.js';
+import { applyModelCapabilities, validateCapabilityBatch } from '../src/capability-defaults.js';
 
 const manifestPath = fileURLToPath(new URL('../native/pi-ai.patch.json', import.meta.url));
 const legacyLabel = 'multi-key revision before per-entry API overrides';
@@ -64,11 +64,11 @@ export function protocolReplacements() {
     },
     {
       before: 'const modelProfile = z.object({\n\tid: z.string().required(),\n\t...modelFields\n});',
-      after: `${applyModelCapabilities.toString()}\nconst capabilityDefaultsProfile = z.union([z.object({ vision: z.boolean().required(), reasoning: z.boolean().required() })]);\nconst capabilityOverridesProfile = z.union([z.object({ vision: z.union([z.boolean(), z.const("original")]), reasoning: z.union([z.boolean(), z.const("original")]) })]);\nconst modelProfile = z.object({\n\tid: z.string().required(),\n\t...modelFields,\n\tcapabilityOverrides: capabilityOverridesProfile\n});`,
+      after: `${applyModelCapabilities.toString()}\n${validateCapabilityBatch.toString()}\nconst capabilityBatchProfile = z.union([z.object({ vision: z.boolean(), reasoning: z.boolean() })]);\nconst capabilityDefaultsProfile = z.union([z.object({ vision: z.boolean().required(), reasoning: z.boolean().required() })]);\nconst capabilityOverridesProfile = z.union([z.object({ vision: z.union([z.boolean(), z.const("original")]), reasoning: z.union([z.boolean(), z.const("original")]) })]);\nconst modelProfile = z.object({\n\tid: z.string().required(),\n\t...modelFields,\n\tcapabilityOverrides: capabilityOverridesProfile\n});`,
     },
     {
       before: '\tsortOrder: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER),\n\tmodels: z.array(modelProfile).required()',
-      after: '\tsortOrder: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER),\n\tcapabilityDefaults: capabilityDefaultsProfile,\n\tmodels: z.array(modelProfile).required()',
+      after: '\tsortOrder: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER),\n\tcapabilityDefaults: capabilityDefaultsProfile,\n\tcapabilityBatch: capabilityBatchProfile,\n\tmodels: z.array(modelProfile).required()',
     },
     {
       before: '\t\tassertWireModels(source.models, "models");',
@@ -76,7 +76,7 @@ export function protocolReplacements() {
     },
     {
       before: '\t\t\tassertWireModels(entry.models, `key entry "${id}" models`);',
-      after: '\t\t\tassertWireModels(entry.models, `key entry "${id}" models`);\n\t\t\tapplyModelCapabilities({}, entry.capabilityDefaults);\n\t\t\tfor (const model of entry.models) applyModelCapabilities(model, entry.capabilityDefaults);',
+      after: '\t\t\tassertWireModels(entry.models, `key entry "${id}" models`);\n\t\t\tapplyModelCapabilities({}, entry.capabilityDefaults);\n\t\t\tvalidateCapabilityBatch(entry.capabilityBatch);\n\t\t\tfor (const model of entry.models) applyModelCapabilities(model, entry.capabilityDefaults);',
     },
     {
       before: '\t\t\t\tmodels: entry.models,',

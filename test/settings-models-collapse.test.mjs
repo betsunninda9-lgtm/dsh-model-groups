@@ -62,7 +62,7 @@ function props() {
 }
 
 test('generated shipped settings patch is hash locked, current and reversible in memory', () => {
-  assert.equal(artifact.variants.length, 5);
+  assert.equal(artifact.variants.length, 6);
   assert.equal(artifact.current, true);
   const stable = JSON.parse(fs.readFileSync(new URL('fixtures/settings-models/v0.3.5.json', import.meta.url), 'utf8'));
   assert.deepEqual(artifact.variants[0].replacements, stable.replacements);

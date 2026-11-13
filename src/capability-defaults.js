@@ -40,3 +40,54 @@ export function validateCapabilityOverrides(overrides) {
   applyModelCapabilities({ capabilityOverrides: overrides });
   return overrides;
 }
+
+/** Last batch selections affect newly introduced models, never runtime overrides. */
+export function validateCapabilityBatch(batch) {
+  if (batch !== undefined && (batch === null || typeof batch !== 'object' || Array.isArray(batch) || Object.keys(batch).some(key => key !== 'vision' && key !== 'reasoning') || Object.values(batch).some(value => typeof value !== 'boolean'))) {
+    throw new TypeError('capabilityBatch must contain only boolean vision and reasoning');
+  }
+  return batch;
+}
+
+export function applyModelBatchCapabilities(model, batch) {
+  validateCapabilityBatch(batch);
+  const original = applyModelCapabilities(model);
+  if (batch === undefined || Object.keys(batch).length === 0) return original;
+  return applyModelCapabilities({ ...original, capabilityOverrides: {
+    ...(batch.vision === undefined ? { vision: 'original' } : {}),
+    ...(batch.reasoning === undefined ? { reasoning: 'original' } : {}),
+  } }, { vision: batch.vision ?? false, reasoning: batch.reasoning ?? false });
+}
+
+/** Upgrade a beta.1 entry in the draft, preserving its actual capabilities. */
+export function materializeCapabilityEntry(entry) {
+  validateCapabilityBatch(entry.capabilityBatch);
+  const { capabilityDefaults, ...rest } = entry;
+  applyModelCapabilities({}, capabilityDefaults);
+  const models = (Array.isArray(entry.models) ? entry.models : []).map(model => applyModelCapabilities(model, capabilityDefaults));
+  const capabilityBatch = capabilityDefaults === undefined ? entry.capabilityBatch : { ...capabilityDefaults, ...entry.capabilityBatch };
+  return { ...rest, models, ...(capabilityBatch === undefined ? {} : { capabilityBatch }) };
+}
+
+export function applyCapabilityBatch(entry, key, enabled) {
+  if (!['vision', 'reasoning'].includes(key) || typeof enabled !== 'boolean') throw new TypeError('capability batch needs vision/reasoning and a boolean');
+  const migrated = materializeCapabilityEntry(entry);
+  return { ...migrated, capabilityBatch: { ...migrated.capabilityBatch, [key]: enabled }, models: migrated.models.map(model => applyModelBatchCapabilities(model, { [key]: enabled })) };
+}
+
+/** Existing incoming rows are edits; only genuinely new IDs inherit batch values. */
+export function mergeCapabilityModels(entry, incoming) {
+  const migrated = materializeCapabilityEntry(entry);
+  const rows = new Map();
+  for (const model of migrated.models) {
+    if (!rows.has(model.id)) rows.set(model.id, []);
+    rows.get(model.id).push(model);
+  }
+  const grows = incoming.length > migrated.models.length;
+  return { ...migrated, models: incoming.map(model => {
+    const previous = rows.get(model.id)?.shift();
+    const nativeOff = migrated.capabilityBatch?.reasoning !== undefined && previous?.reasoningEfforts !== null && typeof previous?.reasoningEfforts === 'object' && !Array.isArray(previous.reasoningEfforts) && model.reasoningEfforts === undefined;
+    const edited = nativeOff ? { ...model, reasoningEfforts: false } : model;
+    return !grows || previous !== undefined ? applyModelCapabilities(edited) : applyModelBatchCapabilities(edited, migrated.capabilityBatch);
+  }) };
+}

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import fs from 'node:fs';
 import { source } from '../scripts/settings-models-collapse.mjs';
 
 const json = value => JSON.parse(JSON.stringify(value));
@@ -31,133 +32,136 @@ function renderer(name) {
   });
   const start = source.indexOf('function rowHalf(event)');
   const end = source.indexOf('\n\t\t//#endregion', source.indexOf('function MultiKeyEntriesEditor(props)'));
-  vm.runInContext(source.slice(start, end) + `\nthis.Component = ${name};`, context);
-  return { render(props) { let tree, tries = 0; do { pending = false; cursor = 0; effects = []; tree = context.Component(props); effects.forEach(fn => fn()); if (++tries > 20) throw new Error('render loop'); } while (pending); return tree; } };
+  vm.runInContext(source.slice(start, end) + `\nthis.Component = ${name};this.normalize=normalizedMultiKeyEntries;`, context);
+  return { context, render(props) { let tree, tries = 0; do { pending = false; cursor = 0; effects = []; tree = context.Component(props); effects.forEach(fn => fn()); if (++tries > 20) throw new Error('render loop'); } while (pending); return tree; } };
 }
 function groupProps(entry = { name: 'Group', models: [{ id: 'one', input: ['text'], reasoningEfforts: false }, { id: 'two', input: ['text', 'image'], reasoningEfforts: { off: null, high: 'custom' } }] }) {
   const p = { entry, disabled: false, t: key => key, onChange: next => { p.entry = next; } }; return p;
 }
-function listProps(models, defaults) {
-  const p = { models, capabilityDefaults: defaults, disabled: false, probe: {}, operations: {}, reasoningLevels: ['off', 'low', 'medium', 'high'], t: key => key, onBusyChange() {}, onChange: next => { p.models = next; } }; return p;
+function listProps(models) {
+  const p = { models, disabled: false, probe: {}, operations: {}, reasoningLevels: ['off', 'low', 'medium', 'high'], t: key => key, onBusyChange() {}, onChange: next => { p.models = next; } }; return p;
 }
-function rowProps(model, defaults) {
-  const p = { model, capabilityDefaults: defaults, position: 1, rowKey: 0, order: {}, disabled: false, t: key => key, expanded: true, contextWindow: { value: '', placeholder: '' }, maxTokens: { value: '', placeholder: '' }, reasoningLevels: ['off', 'low', 'high'], onChange: next => { p.model = next; } }; return p;
+function editorProps(entry) {
+  const entries = { one: entry, two: { name: 'Other', apiKeyEnv: 'OTHER_API_KEY', models: [{ id: 'other' }] } };
+  const p = { route: 'p', entries, persistedEntries: structuredClone(entries), keyDrafts: {}, confirmations: {}, probe: {}, operations: {}, t: key => key, onChange: next => { p.entries = next; }, onKeyDraftsChange() {}, onConfirmationsChange() {} }; return p;
 }
 
-test('first enable preserves existing fields by default, applies only a draft, and new models follow', () => {
-  const r = renderer('GroupCapabilityDefaults'), p = groupProps(); const original = structuredClone(p.entry);
-  let tree = r.render(p);
-  get(tree, 'data-capability-default', 'vision').props.onChange(false);
-  assert.deepEqual(p.entry, original, 'uncommitted enable choice does not silently edit existing models');
-  tree = r.render(p); get(tree, 'data-capability-enable').props.onClick();
-  assert.deepEqual(json(p.entry.capabilityDefaults), { vision: false, reasoning: true });
-  assert.deepEqual(json(p.entry.models[0]), { ...original.models[0], capabilityOverrides: { vision: 'original', reasoning: 'original' } });
-  assert.deepEqual(json(p.entry.models[1].reasoningEfforts), { off: null, high: 'custom' });
-  const list = renderer('ModelListEditor'), lp = listProps(p.entry.models, p.entry.capabilityDefaults);
-  const listTree = list.render(lp);
-  const row = component(listTree, 'ModelRow');
-  assert.deepEqual(json(row.props.capabilityDefaults), { vision: false, reasoning: true });
-  flatten(listTree).find(n => n.type === 'button' && n.props.className === 'native-addModelButton').props.onClick();
-  assert.equal(lp.models.at(-1).id, ''); assert.equal(lp.models.at(-1).capabilityOverrides, undefined);
+test('group layout contains only two native switches, with no policy card, selector, explanation, or model summaries', () => {
+  const r = renderer('GroupCapabilityBatch'), p = groupProps(), tree = r.render(p);
+  assert.equal(flatten(tree).filter(n => n.type?.name === 'Switch').length, 2);
+  assert.equal(flatten(tree).filter(n => ['section', 'p', 'select', 'button', 'strong'].includes(n.type)).length, 0);
+  assert.equal(tree.props.className, 'native-field');
+  assert.equal(Object.hasOwn(tree.props, 'style'), false);
+  assert.ok(get(tree, 'data-capability-batch', 'vision')); assert.ok(get(tree, 'data-capability-batch', 'reasoning'));
 });
 
-test('all-follow enable leaves raw model flags intact and reset is confirmable draft metadata only', () => {
-  const r = renderer('GroupCapabilityDefaults'), p = groupProps(); const raw = structuredClone(p.entry.models);
-  let tree = r.render(p);
-  get(tree, 'data-capability-initial-mode').props.onChange({ target: { value: 'follow' } });
-  tree = r.render(p); get(tree, 'data-capability-enable').props.onClick();
-  assert.deepEqual(json(p.entry.models), raw);
-  p.entry.models[0].capabilityOverrides = { vision: false, reasoning: 'original' };
-  tree = r.render(p); get(tree, 'data-capability-reset').props.onClick();
-  tree = r.render(p); assert.ok(get(tree, 'data-capability-reset-confirm')); assert.ok(p.entry.models[0].capabilityOverrides);
-  get(tree, 'data-capability-reset-cancel').props.onClick(); tree = r.render(p); assert.ok(p.entry.models[0].capabilityOverrides);
-  get(tree, 'data-capability-reset').props.onClick(); tree = r.render(p); get(tree, 'data-capability-reset-accept').props.onClick();
-  assert.deepEqual(json(p.entry.models), raw);
+test('batch switch changes only its capability and native single-model edits survive later rendering', () => {
+  const r = renderer('GroupCapabilityBatch'), p = groupProps(); let tree = r.render(p);
+  get(tree, 'data-capability-batch', 'vision').props.onChange(true);
+  assert.ok(p.entry.models.every(model => model.input.includes('image')));
+  assert.equal(p.entry.models[0].reasoningEfforts, false); assert.equal(p.entry.models[1].reasoningEfforts.high, 'custom');
+  assert.deepEqual(json(p.entry.capabilityBatch), { vision: true });
+  p.entry.models[0] = { ...p.entry.models[0], input: ['text'] };
+  tree = r.render(p); assert.equal(p.entry.models[0].input.includes('image'), false, 'last batch is not a continuously enforced rule');
+  get(tree, 'data-capability-batch', 'reasoning').props.onChange(true);
+  assert.deepEqual(json(p.entry.models[0].input), ['text'], 'other capability batch does not undo single model exception');
+  assert.equal(p.entry.models[1].reasoningEfforts.high, 'custom');
+  tree = r.render(p); get(tree, 'data-capability-batch', 'vision').props.onChange(false);
+  assert.ok(p.entry.models.every(model => !model.input.includes('image')));
+  tree = r.render(p); get(tree, 'data-capability-batch', 'reasoning').props.onChange(false);
+  assert.ok(p.entry.models.every(model => model.reasoningEfforts === false));
 });
 
-test('actual ModelRow exposes follow/on/off choices, reports effective flags and preserves custom wire values', () => {
-  const row = renderer('ModelRow'), p = rowProps({ id: 'one', input: ['text'], reasoningEfforts: { off: null, high: 'wire-special' } }, { vision: true, reasoning: true });
-  let tree = row.render(p); const choices = component(tree, 'ModelCapabilityChoices'); assert.ok(choices);
-  assert.equal(component(tree, 'ModelInputTypes'), undefined, 'following group has no conflicting legacy toggle');
-  const select = renderer('ModelCapabilityChoices');
-  let choiceTree = select.render(choices.props); assert.equal(get(choiceTree, 'data-model-capability', 'vision').props.value, 'follow');
-  get(choiceTree, 'data-model-capability', 'reasoning').props.onChange({ target: { value: 'false' } });
-  assert.equal(p.model.capabilityOverrides.reasoning, false); assert.equal(p.model.reasoningEfforts.high, 'wire-special');
-  tree = row.render(p); choiceTree = select.render(component(tree, 'ModelCapabilityChoices').props);
-  get(choiceTree, 'data-model-capability', 'reasoning').props.onChange({ target: { value: 'true' } });
-  tree = row.render(p); const native = component(tree, 'ModelReasoningEfforts'); assert.equal(native.props.model.reasoningEfforts.high, 'wire-special');
-  native.props.onChange({ ...native.props.model, reasoningEfforts: { off: null, high: 'custom-2' } });
-  assert.equal(p.model.capabilityOverrides.reasoning, true); assert.equal(p.model.reasoningEfforts.high, 'custom-2');
-  assert.deepEqual(json(p.model.input), ['text'], 'editing reasoning does not materialize derived vision field');
-  tree = row.render(p);
-  const offNative = component(tree, 'ModelReasoningEfforts');
-  offNative.props.onChange({ ...offNative.props.model, reasoningEfforts: undefined });
-  assert.equal(p.model.capabilityOverrides.reasoning, false);
-  assert.equal(p.model.reasoningEfforts.high, 'custom-2', 'native off preserves the raw custom map behind explicit off');
-  tree = row.render(p); choiceTree = select.render(component(tree, 'ModelCapabilityChoices').props);
-  get(choiceTree, 'data-model-capability', 'reasoning').props.onChange({ target: { value: 'true' } });
-  tree = row.render(p); assert.equal(component(tree, 'ModelReasoningEfforts').props.model.reasoningEfforts.high, 'custom-2');
-  tree = row.render(p); choiceTree = select.render(component(tree, 'ModelCapabilityChoices').props);
-  get(choiceTree, 'data-model-capability', 'reasoning').props.onChange({ target: { value: 'follow' } });
-  assert.equal(p.model.capabilityOverrides, undefined); assert.equal(p.model.reasoningEfforts.high, 'custom-2');
+test('ModelRow markup and logic exactly match the accepted stable 0.3.9 row', () => {
+  let expected = fs.readFileSync(new URL('fixtures/settings-models/model-rows.js.txt', import.meta.url), 'utf8');
+  const stable = JSON.parse(fs.readFileSync(new URL('fixtures/settings-models/v0.3.9.json', import.meta.url), 'utf8'));
+  for (const { before, after } of stable.replacements) if (expected.includes(before)) expected = expected.split(before).join(after);
+  const row = text => { const start = text.indexOf('function ModelRow(props) {'); return text.slice(start, text.indexOf('\n\t\t//#endregion', start)); };
+  assert.equal(row(source), row(expected));
 });
 
-test('legacy original choice is conditional and native edits become explicit exceptions', () => {
-  const row = renderer('ModelRow'), p = rowProps({ id: 'one', capabilityOverrides: { vision: 'original', reasoning: 'original' } }, { vision: true, reasoning: true });
-  p.inputFallback = ['text', 'image'];
-  let tree = row.render(p), choices = renderer('ModelCapabilityChoices').render(component(tree, 'ModelCapabilityChoices').props);
-  assert.equal(get(choices, 'data-model-capability', 'vision').props.value, 'original');
-  assert.ok(flatten(choices).some(n => n.type === 'option' && n.props.value === 'original'));
-  const native = component(tree, 'ModelInputTypes'); native.props.onChange({ ...native.props.model, input: ['text'] });
-  assert.equal(p.model.capabilityOverrides.vision, false); assert.deepEqual(json(p.model.input), ['text']);
-  tree = row.render(p); choices = renderer('ModelCapabilityChoices').render(component(tree, 'ModelCapabilityChoices').props);
-  assert.equal(flatten(get(choices, 'data-model-capability', 'vision')).some(n => n.type === 'option' && n.props.value === 'original'), false);
+test('actual ModelRow and ModelListEditor retain original fields and original change handlers', () => {
+  const r = renderer('ModelRow'); const onChange = () => {};
+  const p = { model: { id: 'one', input: ['text'], reasoningEfforts: { high: 'custom' } }, position: 1, rowKey: 0, order: {}, disabled: false, t: key => key, expanded: true, contextWindow: { value: '', placeholder: '' }, maxTokens: { value: '', placeholder: '' }, reasoningLevels: ['off', 'low', 'high'], onChange };
+  const tree = r.render(p);
+  assert.equal(component(tree, 'ModelInputTypes').props.model, p.model);
+  assert.equal(component(tree, 'ModelReasoningEfforts').props.model, p.model);
+  assert.equal(component(tree, 'ModelInputTypes').props.onChange, onChange);
+  assert.equal(component(tree, 'ModelReasoningEfforts').props.onChange, onChange);
+  assert.equal(component(tree, 'ModelCapabilityChoices'), undefined);
+  assert.equal(flatten(tree).some(n => n.type === 'select' || n.props?.['data-model-capabilities']), false);
+  const list = renderer('ModelListEditor').render(listProps([p.model]));
+  assert.equal(Object.hasOwn(component(list, 'ModelRow').props, 'capabilityDefaults'), false);
 });
 
-test('unconfigured group retains native model editor behavior and disabled capability controls do not edit', () => {
-  const row = renderer('ModelRow'), p = rowProps({ id: 'one' }, undefined);
-  let tree = row.render(p); assert.ok(component(tree, 'ModelInputTypes')); assert.ok(component(tree, 'ModelReasoningEfforts'));
-  assert.equal(renderer('ModelCapabilityChoices').render(component(tree, 'ModelCapabilityChoices').props), null);
-  const group = renderer('GroupCapabilityDefaults'), gp = groupProps(); gp.disabled = true;
-  tree = group.render(gp); get(tree, 'data-capability-enable').props.onClick(); assert.equal(gp.entry.capabilityDefaults, undefined);
-  get(tree, 'data-capability-default', 'vision').props.onChange(false);
-  gp.disabled = false; tree = group.render(gp); assert.equal(get(tree, 'data-capability-default', 'vision').props.checked, true);
-  const choices = renderer('ModelCapabilityChoices'), cp = { model: { id: 'one' }, defaults: { vision: true, reasoning: true }, disabled: true, expanded: true, t: key => key, onChange() { throw new Error('disabled changed'); } };
-  get(choices.render(cp), 'data-model-capability', 'vision').props.onChange({ target: { value: 'false' } });
+test('group callbacks stay local, materialize beta policy, and preserve native edits through save and reload', () => {
+  const legacy = { name: 'One', apiKeyEnv: 'ONE_API_KEY', capabilityDefaults: { vision: true, reasoning: true }, models: [{ id: 'one', input: ['text'], reasoningEfforts: { off: null, high: 'custom' } }] };
+  const r = renderer('MultiKeyEntriesEditor'), p = editorProps(legacy); let tree = r.render(p);
+  const group = get(tree, 'data-key-entry-id', 'one');
+  assert.equal(group.props['data-key-entry-dirty'], false, 'display migration does not dirty untouched profile');
+  const modelList = component(group, 'ModelListEditor');
+  assert.ok(modelList.props.models[0].input.includes('image'));
+  assert.ok(p.entries.one.capabilityDefaults, 'render does not write any config');
+  modelList.props.onChange([{ ...modelList.props.models[0], input: ['text'], reasoningEfforts: false }]);
+  assert.equal(p.entries.one.capabilityDefaults, undefined);
+  assert.equal(p.entries.one.models[0].capabilityOverrides, undefined);
+  assert.deepEqual(json(p.entries.one.models[0].input), ['text']);
+  assert.equal(p.entries.two.models[0].id, 'other'); assert.equal(p.entries.two.capabilityBatch, undefined);
+  const saved = json(r.context.normalize('p', p.entries));
+  const next = editorProps(saved.one); next.persistedEntries = structuredClone(next.entries);
+  tree = renderer('MultiKeyEntriesEditor').render(next);
+  const loaded = component(get(tree, 'data-key-entry-id', 'one'), 'ModelListEditor').props.models[0];
+  assert.deepEqual(json(loaded.input), ['text']); assert.equal(loaded.reasoningEfforts, false);
 });
 
-test('fetched lists retain old exceptions by model identity and new IDs follow group; busy rows cannot edit', async () => {
-  const existing = { id: 'old', input: ['text'], reasoningEfforts: { high: 'wire' }, capabilityOverrides: { vision: false, reasoning: 'original' } };
-  const r = renderer('ModelListEditor'), p = listProps([existing], { vision: true, reasoning: true });
-  let resolve;
-  p.probe = { provider: 'p' };
-  p.operations = { discoverModels: () => new Promise(done => { resolve = done; }) };
-  let tree = r.render(p);
+test('legacy beta group name edit becomes clean after normalized save without rewriting its untouched draft during render', () => {
+  const legacy = { name: 'One', apiKeyEnv: 'ONE_API_KEY', capabilityDefaults: { vision: true, reasoning: true }, models: [{ id: 'one', input: ['text'], reasoningEfforts: false }] };
+  const r = renderer('MultiKeyEntriesEditor'), p = editorProps(legacy);
+  let tree = r.render(p), group = get(tree, 'data-key-entry-id', 'one');
+  assert.equal(group.props['data-key-entry-dirty'], false);
+  flatten(group).find(n => n.type === 'input' && n.props.type === 'text' && n.props.value === 'One').props.onChange({ target: { value: 'Renamed' } });
+  tree = r.render(p); group = get(tree, 'data-key-entry-id', 'one');
+  assert.equal(group.props['data-key-entry-dirty'], true);
+  assert.ok(p.entries.one.capabilityDefaults, 'name edit does not prematurely convert draft metadata');
+  const saved = json(r.context.normalize('p', p.entries));
+  assert.equal(saved.one.capabilityDefaults, undefined);
+  p.saveState = { ok: true, entries: saved }; p.savedEntries = saved;
+  tree = r.render(p); group = get(tree, 'data-key-entry-id', 'one');
+  assert.equal(group.props['data-key-entry-dirty'], false, 'normalized successful save clears the unsaved marker');
+  assert.equal(group.props['data-key-entry-expanded'], false, 'acknowledged snapshot can collapse normally');
+});
+
+test('new manually added models inherit last group batch without rewriting existing single-model settings', () => {
+  const r = renderer('MultiKeyEntriesEditor'), p = editorProps({ name: 'One', apiKeyEnv: 'ONE_API_KEY', capabilityBatch: { vision: true, reasoning: false }, models: [{ id: 'old', input: ['text'], reasoningEfforts: { high: 'custom' } }] });
+  const listNode = component(get(r.render(p), 'data-key-entry-id', 'one'), 'ModelListEditor');
+  const list = renderer('ModelListEditor'), lp = { ...listProps(listNode.props.models), onChange: listNode.props.onChange };
+  const tree = list.render(lp);
+  flatten(tree).find(n => n.type === 'button' && n.props.className === 'native-addModelButton').props.onClick();
+  assert.deepEqual(json(p.entries.one.models[0].input), ['text']); assert.equal(p.entries.one.models[0].reasoningEfforts.high, 'custom');
+  assert.equal(p.entries.one.models[1].id, ''); assert.ok(p.entries.one.models[1].input.includes('image')); assert.equal(p.entries.one.models[1].reasoningEfforts, false);
+});
+
+test('fetched new model IDs inherit batch while retained IDs preserve raw individual settings', async () => {
+  const r = renderer('MultiKeyEntriesEditor'), p = editorProps({ name: 'One', apiKeyEnv: 'ONE_API_KEY', capabilityBatch: { vision: true, reasoning: true }, models: [{ id: 'old', input: ['text'], reasoningEfforts: false }] });
+  const node = component(get(r.render(p), 'data-key-entry-id', 'one'), 'ModelListEditor');
+  const list = renderer('ModelListEditor'), lp = { ...listProps(node.props.models), probe: { provider: 'p' }, onChange: node.props.onChange, operations: { discoverModels: async () => ({ kind: 'found', models: [{ id: 'old' }, { id: 'new' }] }) } };
+  let tree = list.render(lp);
   flatten(tree).find(n => n.type === 'button' && n.props.children === 'fetchModels').props.onClick();
-  tree = r.render(p);
-  const row = component(tree, 'ModelRow'); assert.equal(row.props.capabilityBusy, true);
-  const rowTree = renderer('ModelRow').render({ ...row.props, expanded: true });
-  const choiceTree = renderer('ModelCapabilityChoices').render(component(rowTree, 'ModelCapabilityChoices').props);
-  assert.equal(get(choiceTree, 'data-model-capability', 'vision').props.disabled, true);
-  resolve({ kind: 'found', models: [{ id: 'old' }, { id: 'new' }] });
   await new Promise(done => setImmediate(done));
-  tree = r.render(p);
-  flatten(tree).find(n => n.props?.children === 'fetchSelectAll' && n.props.onClick).props.onClick();
-  tree = r.render(p);
-  assert.equal(flatten(tree).filter(n => n.type === 'input' && n.props.type === 'checkbox' && n.props.checked).length, 2, 'both fetched IDs selected: ' + JSON.stringify(component(tree, 'Modal').props.children));
-  flatten(component(tree, 'Modal').props.footer).find(n => n.props?.children === 'fetchAdopt' && n.props.onClick).props.onClick();
-  assert.equal(p.models.length, 2, JSON.stringify(p.models));
-  assert.equal(p.models[0], existing); assert.equal(p.models[0].capabilityOverrides.vision, false);
-  assert.equal(p.models[1].id, 'new'); assert.equal(p.models[1].capabilityOverrides, undefined);
+  tree = list.render(lp); flatten(tree).find(n => n.props?.children === 'fetchSelectAll' && n.props.onClick).props.onClick();
+  tree = list.render(lp); flatten(component(tree, 'Modal').props.footer).find(n => n.props?.children === 'fetchAdopt' && n.props.onClick).props.onClick();
+  assert.deepEqual(json(p.entries.one.models[0].input), ['text']); assert.equal(p.entries.one.models[0].reasoningEfforts, false);
+  assert.equal(p.entries.one.models[1].id, 'new'); assert.ok(p.entries.one.models[1].input.includes('image')); assert.equal(p.entries.one.models[1].reasoningEfforts.high, 'high');
 });
 
-test('group wrapper passes defaults only into its ModelListEditor and edits that same group', () => {
-  const r = renderer('MultiKeyEntriesEditor');
-  const entries = { one: { name: 'One', apiKeyEnv: 'ONE_API_KEY', models: [{ id: 'one' }], capabilityDefaults: { vision: true, reasoning: false } }, two: { name: 'Two', apiKeyEnv: 'TWO_API_KEY', models: [{ id: 'two' }] } };
-  const p = { route: 'p', entries, persistedEntries: entries, keyDrafts: {}, confirmations: {}, probe: {}, operations: {}, t: key => key, onChange: next => { p.entries = next; }, onKeyDraftsChange() {}, onConfirmationsChange() {} };
-  const tree = r.render(p), first = get(tree, 'data-key-entry-id', 'one'), second = get(tree, 'data-key-entry-id', 'two');
-  assert.deepEqual(json(component(first, 'ModelListEditor').props.capabilityDefaults), { vision: true, reasoning: false });
-  assert.equal(component(second, 'ModelListEditor').props.capabilityDefaults, undefined);
-  component(first, 'GroupCapabilityDefaults').props.onChange({ ...entries.one, capabilityDefaults: { vision: false, reasoning: false } });
-  assert.equal(p.entries.one.capabilityDefaults.vision, false); assert.equal(p.entries.two, entries.two);
+test('disabled group switches and busy wrapper cannot mutate any entry', () => {
+  const r = renderer('GroupCapabilityBatch'), p = groupProps(); p.disabled = true;
+  get(r.render(p), 'data-capability-batch', 'vision').props.onChange(true);
+  assert.equal(p.entry.capabilityBatch, undefined);
+  const editor = renderer('MultiKeyEntriesEditor'), ep = editorProps({ name: 'One', apiKeyEnv: 'ONE_API_KEY', models: [{ id: 'one' }] });
+  let tree = editor.render(ep); component(get(tree, 'data-key-entry-id', 'one'), 'ModelListEditor').props.onBusyChange(true);
+  tree = editor.render(ep); const g = get(tree, 'data-key-entry-id', 'one'), before = ep.entries;
+  assert.equal(component(g, 'GroupCapabilityBatch').props.disabled, true);
+  component(g, 'GroupCapabilityBatch').props.onChange({ ...ep.entries.one, capabilityBatch: { vision: true } });
+  assert.equal(ep.entries, before);
 });

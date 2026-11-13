@@ -29,7 +29,9 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
   const previousPi = readArtifact('test/fixtures/pi-ai/v0.3.9-beta.1.json');
   const releaseSettings = readArtifact('test/fixtures/settings-models/v0.3.9.json');
   const releasePi = readArtifact('test/fixtures/pi-ai/v0.3.9.json');
-  const isRecent = mode => ['v0.3.8', 'v0.3.9-beta.1', 'v0.3.9'].includes(mode);
+  const capabilityBetaSettings = readArtifact('test/fixtures/settings-models/v0.3.10-beta.1.json');
+  const capabilityBetaPi = readArtifact('test/fixtures/pi-ai/v0.3.10-beta.1.json');
+  const isRecent = mode => ['v0.3.8', 'v0.3.9-beta.1', 'v0.3.9', 'v0.3.10-beta.1'].includes(mode);
   const stablePi = readArtifact('test/fixtures/pi-ai/v0.3.5.json');
   const delta = readArtifact('test/fixtures/pi-ai/credential-cancellation.delta.json');
   const piInput = inputs.find(input => input.name === 'pi-ai.patch.json');
@@ -63,7 +65,7 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
   const beta1Artifacts = path.join(temp, 'beta1-artifacts'); fs.mkdirSync(beta1Artifacts);
   for (const input of inputs) fs.writeFileSync(path.join(beta1Artifacts, input.name), input.name === 'pi-ai.patch.json' ? beta1PiText : JSON.stringify(input.artifact));
 
-  for (const [baseHash, pristinePi] of bases) for (const mode of ['pristine', 'v0.3.5', 'beta.5', '0.3.6-beta.1', 'v0.3.8', 'v0.3.9-beta.1', 'v0.3.9']) {
+  for (const [baseHash, pristinePi] of bases) for (const mode of ['pristine', 'v0.3.5', 'beta.5', '0.3.6-beta.1', 'v0.3.8', 'v0.3.9-beta.1', 'v0.3.9', 'v0.3.10-beta.1']) {
     await t.test(`${baseHash.slice(0, 12)} ${mode} → current test build → exact pristine`, () => {
       const buildInputs = inputs.map(input => input.name === 'pi-ai.patch.json' ? { ...input, pristine: pristinePi } : input);
       const copy = path.join(temp, `${baseHash.slice(0, 12)}-${mode}`); fs.mkdirSync(copy);
@@ -74,7 +76,7 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
         let content = input.pristine;
         if (mode !== 'pristine') {
           const old = isRecent(mode)
-            ? input.name === 'settings-models.patch.json' ? mode === 'v0.3.9' ? releaseSettings : mode === 'v0.3.8' ? previousSettings : reorderBetaSettings : input.name === 'pi-ai.patch.json' ? mode === 'v0.3.9' ? releasePi : previousPi : input.artifact
+            ? input.name === 'settings-models.patch.json' ? mode === 'v0.3.10-beta.1' ? capabilityBetaSettings : mode === 'v0.3.9' ? releaseSettings : mode === 'v0.3.8' ? previousSettings : reorderBetaSettings : input.name === 'pi-ai.patch.json' ? mode === 'v0.3.10-beta.1' ? capabilityBetaPi : mode === 'v0.3.9' ? releasePi : previousPi : input.artifact
             : mode === '0.3.6-beta.1' ? input.name === 'pi-ai.patch.json' ? beta1Pi : input.artifact
             : input.name === 'settings-models.patch.json' ? mode === 'v0.3.5' ? stableSettings : betaSettings : input.name === 'pi-ai.patch.json' ? stablePi : input.artifact;
           const matches = candidates(old).filter(candidate => candidate.baseSha256 === sha256(content));
