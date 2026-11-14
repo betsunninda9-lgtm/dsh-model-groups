@@ -4,7 +4,15 @@
 
 支持 **DSH `0.2.2-rc.1`**、**Node.js 22 或更新版本**。本插件适用于 DSH 网页端，不替换原生 App 的模型菜单。
 
-## 本次更新 · 0.3.9
+## 本次更新 · 0.3.10
+
+- **分组批量开关**：识图和思考强度分别控制，开启则当前组全开，关闭则全关。
+- **保留原版模型界面**：单个模型仍在原详情中单独调整；之后新增的模型沿用最近一次批量设置，重新拉取保留已有模型的单独修改。
+- **沿用原保存按钮**：两个能力独立修改，思考开启提供档位选择，不强制使用高强度。
+
+安装后重启 DSH、刷新网页，在 **设置 → 模型分组** 更新多密钥补丁，再重启并刷新。已使用 beta.2 且补丁就绪的用户无需重复应用相同补丁。[能力开关使用说明](docs/capabilities-beta.md)。
+
+## 上次正式更新 · 0.3.9
 
 - **手机也能排序**：在设置页长按三横线手柄约 400 毫秒，即可调整密钥分组及组内模型顺序；蓝色插入线会提示落点，靠近边缘可自动滚动。
 - **保存后顺序保留**：使用原表单保存按钮，退出再进入设置、打开聊天模型菜单都沿用已保存顺序。未保存的输入和展开状态会保留。
@@ -22,7 +30,7 @@
 dsh plugin --profile web add dsh-model-groups@latest --registry=https://registry.npmjs.org/
 ```
 
-如果 npm 尚未同步到你需要的版本，可以把 `dsh-model-groups@latest` 换成 [GitHub 0.3.9 正式版安装包](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.9/dsh-model-groups-0.3.9.tgz) 的下载地址。安装后，**重启正在使用的 DSH 引擎，再刷新网页**。只想给现有模型分组？装好就可以用，不需要启用多密钥。
+如果 npm 尚未同步到你需要的版本，可以把 `dsh-model-groups@latest` 换成 [GitHub 0.3.10 正式版安装包](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.10/dsh-model-groups-0.3.10.tgz) 的下载地址。安装后，**重启正在使用的 DSH 引擎，再刷新网页**。只想给现有模型分组？装好就可以用，不需要启用多密钥。
 
 ## 在对话中选模型
 

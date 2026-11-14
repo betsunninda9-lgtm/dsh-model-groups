@@ -27,6 +27,11 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
   const previousSettings = readArtifact('test/fixtures/settings-models/v0.3.8.json');
   const reorderBetaSettings = readArtifact('test/fixtures/settings-models/v0.3.9-beta.1.json');
   const previousPi = readArtifact('test/fixtures/pi-ai/v0.3.9-beta.1.json');
+  const releaseSettings = readArtifact('test/fixtures/settings-models/v0.3.9.json');
+  const releasePi = readArtifact('test/fixtures/pi-ai/v0.3.9.json');
+  const capabilityBetaSettings = readArtifact('test/fixtures/settings-models/v0.3.10-beta.1.json');
+  const capabilityBetaPi = readArtifact('test/fixtures/pi-ai/v0.3.10-beta.1.json');
+  const isRecent = mode => ['v0.3.8', 'v0.3.9-beta.1', 'v0.3.9', 'v0.3.10-beta.1'].includes(mode);
   const stablePi = readArtifact('test/fixtures/pi-ai/v0.3.5.json');
   const delta = readArtifact('test/fixtures/pi-ai/credential-cancellation.delta.json');
   const piInput = inputs.find(input => input.name === 'pi-ai.patch.json');
@@ -60,8 +65,8 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
   const beta1Artifacts = path.join(temp, 'beta1-artifacts'); fs.mkdirSync(beta1Artifacts);
   for (const input of inputs) fs.writeFileSync(path.join(beta1Artifacts, input.name), input.name === 'pi-ai.patch.json' ? beta1PiText : JSON.stringify(input.artifact));
 
-  for (const [baseHash, pristinePi] of bases) for (const mode of ['pristine', 'v0.3.5', 'beta.5', '0.3.6-beta.1', 'v0.3.8', 'v0.3.9-beta.1']) {
-    await t.test(`${baseHash.slice(0, 12)} ${mode} → latest stable → exact pristine`, () => {
+  for (const [baseHash, pristinePi] of bases) for (const mode of ['pristine', 'v0.3.5', 'beta.5', '0.3.6-beta.1', 'v0.3.8', 'v0.3.9-beta.1', 'v0.3.9', 'v0.3.10-beta.1']) {
+    await t.test(`${baseHash.slice(0, 12)} ${mode} → current test build → exact pristine`, () => {
       const buildInputs = inputs.map(input => input.name === 'pi-ai.patch.json' ? { ...input, pristine: pristinePi } : input);
       const copy = path.join(temp, `${baseHash.slice(0, 12)}-${mode}`); fs.mkdirSync(copy);
       fs.writeFileSync(path.join(copy, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }));
@@ -70,8 +75,8 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
         fs.writeFileSync(path.join(copy, 'node_modules', input.artifact.packageName, 'package.json'), JSON.stringify({ name: input.artifact.packageName, version: '0.2.2-rc.1' }));
         let content = input.pristine;
         if (mode !== 'pristine') {
-          const old = mode === 'v0.3.8' || mode === 'v0.3.9-beta.1'
-            ? input.name === 'settings-models.patch.json' ? mode === 'v0.3.8' ? previousSettings : reorderBetaSettings : input.name === 'pi-ai.patch.json' ? previousPi : input.artifact
+          const old = isRecent(mode)
+            ? input.name === 'settings-models.patch.json' ? mode === 'v0.3.10-beta.1' ? capabilityBetaSettings : mode === 'v0.3.9' ? releaseSettings : mode === 'v0.3.8' ? previousSettings : reorderBetaSettings : input.name === 'pi-ai.patch.json' ? mode === 'v0.3.10-beta.1' ? capabilityBetaPi : mode === 'v0.3.9' ? releasePi : previousPi : input.artifact
             : mode === '0.3.6-beta.1' ? input.name === 'pi-ai.patch.json' ? beta1Pi : input.artifact
             : input.name === 'settings-models.patch.json' ? mode === 'v0.3.5' ? stableSettings : betaSettings : input.name === 'pi-ai.patch.json' ? stablePi : input.artifact;
           const matches = candidates(old).filter(candidate => candidate.baseSha256 === sha256(content));
@@ -79,7 +84,7 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
           assert.ok(revision, `${mode}: legacy artifact recognizes ${input.name} pristine base`);
           content = transformSource(content, revision);
         }
-        if (input.name === 'pi-ai.patch.json' && mode !== 'pristine' && mode !== 'v0.3.8' && mode !== 'v0.3.9-beta.1' && baseHash === delta.resultSha256) {
+        if (input.name === 'pi-ai.patch.json' && mode !== 'pristine' && !isRecent(mode) && baseHash === delta.resultSha256) {
           assert.equal(sha256(content), delta.legacyResultSha256);
           if (suppliedLegacy.has(baseHash)) assert.equal(content, suppliedLegacy.get(baseHash), 'fixture is the complete untouched uploaded legacy program');
         }
@@ -101,7 +106,7 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
         assert.equal(before.find(plan => plan.name === 'settings-models.patch.json').updateAvailable, true);
         assert.equal(before.find(plan => plan.name === 'pi-ai.patch.json').updateAvailable, true);
       }
-      if (baseHash === delta.resultSha256 && mode !== 'v0.3.8' && mode !== 'v0.3.9-beta.1') {
+      if (baseHash === delta.resultSha256 && !isRecent(mode)) {
         const unsupported = planPatches(copy, 'check', beta1Artifacts).find(plan => plan.name === 'pi-ai.patch.json');
         assert.equal(unsupported.applySupported, false, 'old beta.1 really did reject this exact build');
         assert.throws(() => planPatches(copy, 'apply', beta1Artifacts), /No verified current patch/);
@@ -112,10 +117,10 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
       const changed = applyPlan(apply, path.join(copy, 'backups'));
       assert.equal(changed > 0, needsUpdate);
       if (mode === '0.3.6-beta.1' && baseHash === delta.resultSha256) assert.equal(changed, 1, 'already-current settings/other artifacts stay byte-identical');
-      if (mode === 'v0.3.8' || mode === 'v0.3.9-beta.1') {
+      if (isRecent(mode)) {
         assert.equal(before.find(plan => plan.name === 'settings-models.patch.json').updateAvailable, true);
         assert.equal(before.find(plan => plan.name === 'pi-ai.patch.json').updateAvailable, true);
-        assert.equal(changed, 2, `upgrading ${mode} updates settings and the explicit-rank backend schema`);
+        assert.equal(changed, 2, `upgrading ${mode} updates settings and the capability-aware backend schema`);
       }
       const after = planPatches(copy, 'check');
       assert.ok(after.every(plan => plan.state === 'patched' && !plan.updateAvailable && plan.applySupported));
@@ -128,7 +133,7 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
         const latest = candidates(input.artifact).find(candidate => candidate.baseSha256 === sha256(input.pristine) && candidate.current === true) ?? input.artifact;
         assert.equal(sha256(plan.source), latest.resultSha256);
       }
-      if (baseHash === delta.resultSha256 && mode !== 'pristine' && mode !== 'v0.3.8' && mode !== 'v0.3.9-beta.1') {
+      if (baseHash === delta.resultSha256 && mode !== 'pristine' && !isRecent(mode)) {
         const backup = path.join(copy, 'backups', `dsh-llm-pi-ai-index.js-${delta.legacyResultSha256}.js`);
         assert.equal(sha256(fs.readFileSync(backup)), delta.legacyResultSha256, 'original uploaded legacy program is backed up exactly');
       }

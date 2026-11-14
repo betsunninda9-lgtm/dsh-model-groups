@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sha256, transformSource } from '../scripts/native-patches.mjs';
 import { buildProtocolArtifact, protocolReplacements } from '../scripts/pi-ai-protocol.mjs';
 import { buildModelHierarchy } from '../src/hierarchy.js';
+import { applyCapabilityBatch, materializeCapabilityEntry, mergeCapabilityModels } from '../src/capability-defaults.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const artifact = JSON.parse(fs.readFileSync(path.join(root, 'native/pi-ai.patch.json'), 'utf8'));
@@ -46,10 +47,10 @@ if (bases.has(cancellationDelta.baseSha256)) {
 const dependencyPath = path.join(dshRoot, 'package.json');
 const require = fs.existsSync(dependencyPath) ? createRequire(dependencyPath) : undefined;
 
-function runtime(source) {
+function runtime(source, catalogCapabilities = {}) {
   const requests = [];
   const probes = [];
-  const model = { id: 'catalog-model', name: 'Catalog model', api: 'openai-completions', provider: 'catalog-route', baseUrl: 'https://catalog.invalid/v1', input: ['text'], contextWindow: 4096, maxTokens: 512, reasoning: false, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const model = { id: 'catalog-model', name: 'Catalog model', api: 'openai-completions', provider: 'catalog-route', baseUrl: 'https://catalog.invalid/v1', input: ['text'], contextWindow: 4096, maxTokens: 512, reasoning: false, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, ...catalogCapabilities };
   const usage = { input: 11, output: 7, cacheRead: 5, cacheWrite: 3, totalTokens: 26, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
   const implementation = api => ({
     async *streamSimple(selected, context, options) {
@@ -58,7 +59,7 @@ function runtime(source) {
     },
     stream() { throw new Error('Unexpected non-simple stream'); },
   });
-  const catalog = { id: 'catalog-route', name: 'Catalog route', baseUrl: model.baseUrl, auth: { apiKey: {} }, getModels: () => [model], ...implementation(model.api) };
+  const catalog = { id: model.provider, name: 'Catalog route', baseUrl: model.baseUrl, auth: { apiKey: {} }, getModels: () => [model], ...implementation(model.api) };
   const deps = {};
   for (const line of source.match(/^import .*;$/gm) ?? []) {
     const named = /^import \{ (.+) \} from "([^"]+)";$/.exec(line);
@@ -134,7 +135,21 @@ test('every released pi-ai revision keeps its exact hashes and original reversib
   assert.equal(new Set(current.map(value => value.baseSha256)).size, current.length);
   assert.equal(current.length, 3, 'all three current hashes come from verified real program bytes');
   const third = current.find(value => value.baseSha256 === cancellationDelta.resultSha256);
-  assert.equal(third?.resultSha256, '70dd30c46c5504422738a158acf789bb6fe43cff9b134d5ddf5e5c3da3236340');
+  assert.ok(third?.resultSha256);
+  const stable = JSON.parse(fs.readFileSync(path.join(root, 'test/fixtures/pi-ai/v0.3.9.json'), 'utf8'));
+  for (const old of revisions(stable)) {
+    const retained = all.find(value => value.resultSha256 === old.resultSha256);
+    assert.ok(retained, 'stable 0.3.9 must remain directly reversible');
+    assert.deepEqual(retained.replacements, old.replacements);
+    assert.notEqual(retained.current, true);
+  }
+  const capabilityBeta1 = JSON.parse(fs.readFileSync(path.join(root, 'test/fixtures/pi-ai/v0.3.10-beta.1.json'), 'utf8'));
+  for (const old of revisions(capabilityBeta1)) {
+    const retained = all.find(value => value.resultSha256 === old.resultSha256);
+    assert.ok(retained, 'capability beta1 must remain directly reversible');
+    assert.deepEqual(retained.replacements, old.replacements);
+    assert.notEqual(retained.current, true);
+  }
   const beta1 = JSON.parse(fs.readFileSync(path.join(root, 'test/fixtures/pi-ai/v0.3.9-beta.1.json'), 'utf8'));
   for (const old of revisions(beta1)) {
     const retained = all.find(value => value.resultSha256 === old.resultSha256);
@@ -218,6 +233,107 @@ for (const revision of current) {
     }
     assert.equal(module.keyEntryProfile.dict.sortOrder.meta.required, undefined);
   });
+  test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: batch metadata never forces existing raw capabilities and legacy migration preserves runtime`, { skip: !enabled }, async () => {
+    const module = runtime(transformSource(pristine, revision), { provider: 'gateway', input: ['text', 'image'], reasoning: true });
+    const providers = config();
+    providers.gateway.keyEntries = { batch: { name: 'Batch', apiKeyEnv: 'BATCH_KEY', capabilityBatch: { vision: true, reasoning: true }, models: [{ id: 'catalog-model', input: ['text'], reasoningEfforts: false }] } };
+    const checked = schemaProviders(module, providers);
+    assert.deepEqual(checked.gateway.keyEntries.batch.capabilityBatch, { vision: true, reasoning: true });
+    let profiles = module.resolveProfiles(checked);
+    const adapter = new module.PiAiAdapter({ profiles: () => profiles, resolveApiKey: async () => 'offline-key' });
+    const selected = module.keyModelId('batch', 'catalog-model');
+    let info = await adapter.resolveModel('gateway', selected);
+    assert.deepEqual(info.inputModalities, ['text']);
+    assert.equal(info.reasoning, undefined, 'individual raw edits beat remembered batch ON');
+    const batched = applyCapabilityBatch(checked.gateway.keyEntries.batch, 'reasoning', false);
+    assert.deepEqual(batched.models[0].input, ['text']);
+    assert.equal(batched.models[0].reasoningEfforts, false);
+    const nativeOn = applyCapabilityBatch(checked.gateway.keyEntries.batch, 'reasoning', true);
+    const nativeOff = mergeCapabilityModels(nativeOn, nativeOn.models.map(({ reasoningEfforts, ...model }) => model));
+    providers.gateway.keyEntries.batch = nativeOff;
+    profiles = module.resolveProfiles(schemaProviders(module, providers));
+    assert.equal((await adapter.resolveModel('gateway', selected)).reasoning, undefined, 'original native OFF stays disabled despite catalog capability');
+    const legacy = { name: 'Legacy', apiKeyEnv: 'LEGACY_KEY', capabilityDefaults: { vision: true, reasoning: true }, models: [{ id: 'catalog-model', capabilityOverrides: { vision: false } }] };
+    providers.gateway.keyEntries = { batch: legacy };
+    profiles = module.resolveProfiles(schemaProviders(module, providers));
+    const before = await adapter.resolveModel('gateway', selected);
+    providers.gateway.keyEntries.batch = materializeCapabilityEntry(legacy);
+    profiles = module.resolveProfiles(schemaProviders(module, providers));
+    assert.deepEqual(await adapter.resolveModel('gateway', selected), before, 'beta1 migration changes metadata without changing actual model behavior');
+    const yaml = require('yaml');
+    const restored = schemaProviders(module, yaml.parse(yaml.stringify({ providers })).providers);
+    assert.equal(restored.gateway.keyEntries.batch.capabilityDefaults, undefined);
+    assert.deepEqual(restored.gateway.keyEntries.batch.capabilityBatch, { vision: true, reasoning: true });
+    for (const batch of [null, [], { vision: undefined }, { vision: 'true' }, { reasoning: null }, { other: true }]) for (const multiKey of [true, false]) {
+      const invalid = config({ multiKey }); invalid.gateway.keyEntries.inherited.capabilityBatch = batch;
+      assert.throws(() => module.resolveProfiles(invalid, 'deferred'), /capabilityBatch/);
+    }
+    const partial = config(); partial.gateway.keyEntries.inherited.capabilityBatch = { vision: false };
+    assert.deepEqual(schemaProviders(module, partial).gateway.keyEntries.inherited.capabilityBatch, { vision: false }, 'untouched reasoning key stays absent');
+  });
+
+  test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: group capability policy reaches schema, catalog and actual dispatch`, { skip: !enabled }, async () => {
+    const module = runtime(transformSource(pristine, revision), { provider: 'gateway', input: ['text', 'image'], reasoning: true, thinkingLevelMap: { low: 'catalog-low', medium: 'catalog-mid', high: 'catalog-high' } });
+    const providers = config();
+    providers.gateway.keyEntries = {
+      follow: { name: 'Follow', apiKeyEnv: 'FOLLOW_KEY', capabilityDefaults: { vision: true, reasoning: true }, models: [{ id: 'catalog-model' }, { id: 'new-model' }, { id: 'custom', reasoningEfforts: { off: null, minimal: 'vendor-tiny', xhigh: 'vendor-extra' } }] },
+      disabled: { name: 'Disabled', apiKeyEnv: 'DISABLED_KEY', capabilityDefaults: { vision: false, reasoning: false }, models: [{ id: 'catalog-model' }] },
+      preserved: { name: 'Preserved', apiKeyEnv: 'PRESERVED_KEY', capabilityDefaults: { vision: false, reasoning: false }, models: [{ id: 'catalog-model', capabilityOverrides: { vision: 'original', reasoning: 'original' } }] },
+      exception: { name: 'Exception', apiKeyEnv: 'EXCEPTION_KEY', capabilityDefaults: { vision: false, reasoning: false }, models: [{ id: 'new-model', capabilityOverrides: { vision: true, reasoning: true } }] },
+      legacy: { name: 'Legacy', apiKeyEnv: 'LEGACY_KEY', models: [{ id: 'catalog-model' }, { id: 'new-model', capabilityOverrides: { vision: true, reasoning: true } }] },
+    };
+    const raw = structuredClone(providers);
+    const checked = schemaProviders(module, providers);
+    assert.deepEqual(checked.gateway.keyEntries.follow.capabilityDefaults, { vision: true, reasoning: true });
+    assert.equal(checked.gateway.keyEntries.legacy.capabilityDefaults, undefined, 'missing object stays absent, never materializes disabled defaults');
+    assert.equal(checked.gateway.keyEntries.follow.models[0].capabilityOverrides, undefined, 'new model follows group without generated override');
+    const profiles = module.resolveProfiles(checked);
+    const adapter = new module.PiAiAdapter({ profiles: () => profiles, resolveApiKey: async () => 'offline-key' });
+    const info = (entry, wire) => adapter.resolveModel('gateway', module.keyModelId(entry, wire));
+    const listed = await adapter.listModels('gateway');
+    assert.deepEqual(listed.find(model => model.id === module.keyModelId('follow', 'new-model')).inputModalities, ['text', 'image']);
+    assert.deepEqual((await info('disabled', 'catalog-model')).inputModalities, ['text']);
+    assert.equal((await info('disabled', 'catalog-model')).reasoning, undefined, 'explicit false defeats capable built-in catalog');
+    assert.deepEqual((await info('preserved', 'catalog-model')).inputModalities, ['text', 'image']);
+    assert.ok((await info('preserved', 'catalog-model')).reasoning);
+    assert.deepEqual((await info('legacy', 'new-model')).inputModalities, ['text']);
+    assert.equal((await info('legacy', 'new-model')).reasoning, undefined, 'dormant override cannot change legacy group behavior');
+    assert.deepEqual((await info('exception', 'new-model')).reasoning.efforts.map(level => level.id), ['off', 'low', 'medium', 'high']);
+    assert.deepEqual((await info('follow', 'custom')).reasoning.efforts.map(level => level.id), ['off', 'minimal', 'xhigh']);
+    const messages = [{ role: 'user', content: [{ type: 'text', text: 'offline test' }] }];
+    await chunks(adapter.stream({ provider: 'gateway', model: module.keyModelId('follow', 'custom'), messages, reasoningEffort: 'xhigh' }));
+    assert.equal(module.requests.at(-1).model.thinkingLevelMap.xhigh, 'vendor-extra');
+    assert.equal(module.requests.at(-1).options.reasoning, 'xhigh');
+    await chunks(adapter.stream({ provider: 'gateway', model: module.keyModelId('follow', 'new-model'), messages }));
+    assert.equal(module.requests.at(-1).options.reasoning, undefined, 'enabling selector never selects a strength automatically');
+    await assert.rejects(chunks(adapter.stream({ provider: 'gateway', model: module.keyModelId('disabled', 'catalog-model'), messages, reasoningEffort: 'high' })), /does not support reasoning effort/);
+    assert.deepEqual(providers, raw, 'runtime materialization never writes effective fields into saved raw config');
+    const yaml = require('yaml');
+    const restored = schemaProviders(module, yaml.parse(yaml.stringify({ providers: checked })).providers);
+    assert.deepEqual(restored.gateway.keyEntries.follow.models[2].reasoningEfforts, { off: null, minimal: 'vendor-tiny', xhigh: 'vendor-extra' });
+    assert.deepEqual(restored.gateway.keyEntries.preserved.models[0].capabilityOverrides, { vision: 'original', reasoning: 'original' });
+  });
+
+  test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: invalid capability metadata fails closed even on inactive entries`, { skip: !enabled }, () => {
+    const module = runtime(transformSource(pristine, revision));
+    for (const defaults of [null, [], {}, { vision: true }, { vision: true, reasoning: 'yes' }, { vision: true, reasoning: true, other: false }]) for (const multiKey of [true, false]) for (const validation of ['strict', 'deferred']) {
+      const providers = config({ multiKey });
+      providers.gateway.keyEntries.inherited.capabilityDefaults = defaults;
+      assert.throws(() => module.resolveProfiles(providers, validation), /capabilityDefaults/);
+    }
+    for (const overrides of [null, [], { vision: null }, { vision: 'follow' }, { reasoning: 1 }, { other: true }]) for (const multiKey of [true, false]) {
+      const providers = config({ multiKey });
+      providers.gateway.keyEntries.inherited.models[0].capabilityOverrides = overrides;
+      assert.throws(() => module.resolveProfiles(providers, 'deferred'), /capabilityOverrides/);
+    }
+    for (const defaults of [{ vision: true }, { vision: true, reasoning: 'yes' }]) {
+      const providers = config(); providers.gateway.keyEntries.inherited.capabilityDefaults = defaults;
+      assert.throws(() => schemaProviders(module, providers), /expected/);
+    }
+    const providers = config(); providers.gateway.keyEntries.inherited.models[0].capabilityOverrides = { reasoning: 'bogus' };
+    assert.throws(() => schemaProviders(module, providers), /expected/);
+  });
+
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: actual optional schema and strict/deferred fail-closed resolver`, { skip: !enabled }, () => {
     const module = runtime(transformSource(pristine, revision));
     const inputs = config();

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256, transformSource } from './native-patches.mjs';
+import { applyModelCapabilities, validateCapabilityBatch } from '../src/capability-defaults.js';
 
 const manifestPath = fileURLToPath(new URL('../native/pi-ai.patch.json', import.meta.url));
 const legacyLabel = 'multi-key revision before per-entry API overrides';
@@ -60,6 +61,26 @@ export function protocolReplacements() {
       // Now that model requests normalize too, say what actually happens.
       before: '* gateway documentation publishes both spellings of the same root. Only this\n* listing URL normalizes that segment; model requests receive the configured\n* `baseURL` unchanged.\n*/',
       after: '* gateway documentation publishes both spellings of the same root. Anthropic\n* listings and model requests both normalize it, because the Anthropic SDK\n* appends `/v1/messages` on its own while OpenAI protocols append\n* `/chat/completions`; without this, one root would work for chat and double\n* the segment for Anthropic.\n*/',
+    },
+    {
+      before: 'const modelProfile = z.object({\n\tid: z.string().required(),\n\t...modelFields\n});',
+      after: `${applyModelCapabilities.toString()}\n${validateCapabilityBatch.toString()}\nconst capabilityBatchProfile = z.union([z.object({ vision: z.boolean(), reasoning: z.boolean() })]);\nconst capabilityDefaultsProfile = z.union([z.object({ vision: z.boolean().required(), reasoning: z.boolean().required() })]);\nconst capabilityOverridesProfile = z.union([z.object({ vision: z.union([z.boolean(), z.const("original")]), reasoning: z.union([z.boolean(), z.const("original")]) })]);\nconst modelProfile = z.object({\n\tid: z.string().required(),\n\t...modelFields,\n\tcapabilityOverrides: capabilityOverridesProfile\n});`,
+    },
+    {
+      before: '\tsortOrder: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER),\n\tmodels: z.array(modelProfile).required()',
+      after: '\tsortOrder: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER),\n\tcapabilityDefaults: capabilityDefaultsProfile,\n\tcapabilityBatch: capabilityBatchProfile,\n\tmodels: z.array(modelProfile).required()',
+    },
+    {
+      before: '\t\tassertWireModels(source.models, "models");',
+      after: '\t\tassertWireModels(source.models, "models");\n\t\tfor (const model of source.models ?? []) applyModelCapabilities(model);',
+    },
+    {
+      before: '\t\t\tassertWireModels(entry.models, `key entry "${id}" models`);',
+      after: '\t\t\tassertWireModels(entry.models, `key entry "${id}" models`);\n\t\t\tapplyModelCapabilities({}, entry.capabilityDefaults);\n\t\t\tvalidateCapabilityBatch(entry.capabilityBatch);\n\t\t\tfor (const model of entry.models) applyModelCapabilities(model, entry.capabilityDefaults);',
+    },
+    {
+      before: '\t\t\t\tmodels: entry.models,',
+      after: '\t\t\t\tmodels: entry.models.map(model => applyModelCapabilities(model, entry.capabilityDefaults)),',
     },
   ];
 }
