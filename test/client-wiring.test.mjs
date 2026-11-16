@@ -10,7 +10,7 @@ function mount({ request, schedule = setTimeout, cancel = clearTimeout } = {}) {
   const document = {
     head: { appendChild: node => styles.push(node) },
     body: { appendChild: node => notices.push(node) },
-    createElement: () => ({ dataset: {}, style: {}, setAttribute(name, value) { this[name] = value; }, remove() {
+    createElement: () => ({ dataset: {}, style: {}, children: [], appendChild(node) { this.children.push(node); }, setAttribute(name, value) { this[name] = value; }, remove() {
       for (const list of [styles, notices]) { const at = list.indexOf(this); if (at >= 0) list.splice(at, 1); }
     } }),
     querySelector: selector => styles.find(node => selector.includes(JSON.stringify(node.dataset.pluginCss))) ?? null,
@@ -69,15 +69,28 @@ for (const terminal of [{ state: 'ready', restartRequired: true }, { state: 'rea
     assert.equal(app.calls[0][1].cache, 'no-store');
     assert.equal(app.notices.length, 1);
     assert.equal(app.notices[0].role, 'status');
-    assert.match(app.notices[0].textContent, /自动恢复已暂缓/);
+    assert.match(app.notices[0].children[0].textContent, /空闲后自动恢复/);
+    assert.match(app.notices[0].style.cssText, /65%,transparent/);
     app.tick(); await app.settle();
     assert.equal(app.calls.length, 2);
     assert.equal(app.timers.size, 0, 'terminal status stops polling');
     assert.equal(app.notices.length, terminal.restartRequired ? 1 : 0);
-    if (terminal.restartRequired) assert.match(app.notices[0].textContent, /重启 DSH 引擎并刷新网页/);
+    if (terminal.restartRequired) assert.match(app.notices[0].children[0].textContent, /重启引擎后生效/);
     app.dispose(); assert.equal(app.notices.length, 0);
   });
 }
+
+test('dismissed notice stays hidden during deferred polling but a changed status appears', async () => {
+  const app = statusHarness([{ state: 'deferred' }, { state: 'deferred' }, { state: 'ready', restartRequired: true }]);
+  await app.settle();
+  app.notices[0].children[1].onclick();
+  assert.equal(app.notices.length, 0);
+  app.tick(); await app.settle();
+  assert.equal(app.notices.length, 0);
+  app.tick(); await app.settle();
+  assert.equal(app.notices.length, 1);
+  app.dispose();
+});
 
 test('dispose removes the deferred banner and cancels its pending status timer', async () => {
   const app = statusHarness([{ state: 'deferred' }]); await app.settle();
