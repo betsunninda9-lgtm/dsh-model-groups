@@ -13,6 +13,15 @@ export function compatibilitySnapshot(value) {
       installedVersion: publicVersion(item.installedVersion), observedSha256: publicHash(item.observedSha256),
       baseSha256: publicHash(item.baseSha256), targetSha256: publicHash(item.targetSha256) })) };
 }
+export function patchStatusMessage(status) {
+  if (status?.restartRequired) return '多密钥程序文件已更新。请保存草稿，重启 DSH 引擎并刷新网页后使用。';
+  if (status?.state === 'disabled' || status?.state === 'ready') return '';
+  if (status?.state === 'deferred') return '多密钥自动恢复已暂缓，将在任务和其他引擎空闲后自动重试。';
+  if (status?.state === 'conflict') return '当前宿主的相关代码无法自动适配。请打开「设置 → 模型分组」查看详情。';
+  if (status?.state === 'needs-repair') return '多密钥程序需要恢复。请打开「设置 → 模型分组」修复。';
+  if (status?.failed) return '暂时无法检查多密钥状态，请在「设置 → 模型分组」重试。';
+  return '';
+}
 export function compatibilityGuidance(snapshot) {
   const codes = snapshot?.files.map(item => item.code) ?? [];
   if (codes.includes('host_version') || codes.includes('package_version')) return '宿主程序版本不在本版支持范围。先核对插件与 DSH 的兼容版本；不要强行降级、覆盖文件或删除配置。';

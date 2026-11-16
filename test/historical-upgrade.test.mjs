@@ -266,14 +266,32 @@ test('every historical release directly upgrades five real program copies, prese
       assert.equal(applyPlan(planPatches(copy, 'revert'), backups), 5);
       for (const input of buildInputs) assert.equal(fs.readFileSync(path.join(copy, input.artifact.target), 'utf8'), input.pristine, 'revert restores this build\'s exact original program');
       assertSentinels();
-      // A late fifth-file conflict must prevent even earlier valid targets from
-      // being patched; original data AND existing backups remain untouched.
-      const last = path.join(copy, buildInputs.at(-1).artifact.target);
-      fs.appendFileSync(last, '\n// synthetic unknown content; must fail closed\n');
-      const conflictedTree = snapshotTree(copy);
-      assert.throws(() => applyPlan(planPatches(copy, 'apply'), backups), /Refusing unrecognized content/);
-      assert.deepEqual(snapshotTree(copy), conflictedTree, 'unknown content blocks the entire batch without writes');
+      // Whole-file drift outside required fragments must survive apply/revert.
+      const lastInput = buildInputs.at(-1);
+      const last = path.join(copy, lastInput.artifact.target);
+      const unrelated = '\n// synthetic unrelated host change\n';
+      fs.appendFileSync(last, unrelated);
+      const compatibleTree = snapshotTree(copy);
+      const compatiblePlan = planPatches(copy, 'apply');
+      assert.equal(compatiblePlan.at(-1).compatibility, 'fragments');
+      assert.equal(applyPlan(compatiblePlan, backups), 5);
+      assert.ok(fs.readFileSync(last, 'utf8').endsWith(unrelated), 'apply preserves unrelated host code');
       assertSentinels();
+      assert.equal(applyPlan(planPatches(copy, 'revert'), backups), 5);
+      for (const [relative, bytes] of compatibleTree) assert.deepEqual(fs.readFileSync(path.join(copy, relative)), bytes, 'compatible variant restores exactly; existing backups stay unchanged');
+      // A late fifth-file missing or partially applied required recipe must
+      // prevent earlier valid targets from being patched; data/backups stay intact.
+      const latest = latestRevision(lastInput.artifact, sha256(lastInput.pristine));
+      const replacement = latest.replacements[0];
+      assert.ok(lastInput.pristine.includes(replacement.before), 'conflict fixture uses a real required fragment');
+      const partial = lastInput.pristine.replace(replacement.before, replacement.after);
+      for (const source of ['export const incompatibleHostSchema = {};\n', partial]) {
+        fs.writeFileSync(last, source);
+        const conflictedTree = snapshotTree(copy);
+        assert.throws(() => applyPlan(planPatches(copy, 'apply'), backups), /Refusing unrecognized content/);
+        assert.deepEqual(snapshotTree(copy), conflictedTree, 'incompatible fragments block the entire batch without writes');
+        assertSentinels();
+      }
       passed++;
     });
   }

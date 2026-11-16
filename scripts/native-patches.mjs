@@ -3,11 +3,35 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { compatibilitySnapshot } from '../src/compatibility.js';
+import { structuralRevision } from './structural-patches.mjs';
+import { spawnSync } from 'node:child_process';
 
 export const ARTIFACTS = ['pi-ai.patch.json', 'settings-models.patch.json', 'llm-typert.host.patch.json', 'llm-typert.remote-client.patch.json', 'api-remotes.patch.json'];
 const pluginRoot = fileURLToPath(new URL('../', import.meta.url));
 export const sha256 = source => crypto.createHash('sha256').update(source).digest('hex');
 const inside = (root, target) => target.startsWith(root + path.sep);
+const structuralTargets = new Set([
+  'node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js',
+  'node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.js',
+  'node_modules/@deepseek-ai/dsh-llm/lib/typert.host.js',
+  'node_modules/@deepseek-ai/dsh-llm/lib/typert.remote-client.js',
+  'node_modules/@deepseek-ai/dsh-api-remotes/lib/client.js',
+]);
+const structuralCache = new Map();
+function compatibleRevision(source, candidates) {
+  const key = sha256(source + JSON.stringify(candidates));
+  if (structuralCache.has(key)) return structuralCache.get(key);
+  const revision = structuralRevision(source, candidates);
+  if (revision) {
+    for (const content of new Set([revision.original, revision.latest])) {
+      const check = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: content, encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024 });
+      if (check.status !== 0) throw new Error('Structural patch syntax check failed');
+    }
+  }
+  if (structuralCache.size >= 32) structuralCache.delete(structuralCache.keys().next().value);
+  structuralCache.set(key, revision);
+  return revision;
+}
 
 export function transformSource(source, artifact, reverse = false) {
   let result = source;
@@ -67,7 +91,16 @@ function planPatchFiles(dshRoot, mode, artifactDirectory, names) {
     if (patchedMatches.length > 1) throw new Error('Ambiguous patch variant');
     artifact = patchedMatches[0] || candidates.find(candidate => hash === candidate.baseSha256) || primary;
     const state = hash === artifact.baseSha256 ? 'pristine' : hash === artifact.resultSha256 ? 'patched' : 'modified';
-    if (state === 'modified') throw new Error(`Refusing unrecognized content: ${artifact.target}`);
+    if (state === 'modified') {
+      const compatible = structuralTargets.has(primary.target) ? compatibleRevision(source, candidates) : null;
+      if (!compatible) throw new Error(`Refusing unrecognized content: ${artifact.target}`);
+      const { original, latest } = compatible;
+      return { name, artifact: { ...primary, baseSha256: sha256(original), resultSha256: sha256(latest) }, file, source,
+        result: mode === 'apply' ? latest : mode === 'revert' ? original : source,
+        state: compatible.state, updateAvailable: compatible.state === 'patched' && source !== latest,
+        applySupported: true, compatibility: 'fragments', observedSha256: hash, baseSha256: sha256(original),
+        targetSha256: sha256(latest), mode: fs.statSync(file).mode & 0o777 };
+    }
     const original = state === 'patched' ? transformSource(source, artifact, true) : source;
     // Verify the observed revision bidirectionally, including check/no-op plans.
     const observedPatched = transformSource(original, artifact);

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { autoPatch, findDshRoot } from '../src/auto-patch.js';
+import { autoPatch, findDshRoot, startupActivity } from '../src/auto-patch.js';
 import { planPatches } from '../scripts/native-patches.mjs';
 
 test('automatic patch validates all inputs, backs up outside package and repeats without writes', t => {
@@ -27,11 +27,22 @@ test('automatic patch validates all inputs, backs up outside package and repeats
   }
   assert.equal(findDshRoot(path.join(root, 'package.json')), root);
   const bad = path.join(root, plans[0].artifact.target);
-  fs.appendFileSync(bad, '\nunknown');
-  assert.throws(() => autoPatch(root, home), /unrecognized content/);
-  assert.equal(fs.existsSync(home), false);
-  fs.writeFileSync(bad, plans[0].result);
+  const replacement = plans[0].artifact.replacements[0];
+  assert.ok(plans[0].result.includes(replacement.before), 'conflict fixture starts from a real required fragment');
+  const partial = plans[0].result.replace(replacement.before, replacement.after);
+  for (const source of ['export const incompatibleHostSchema = {};\n', partial]) {
+    fs.writeFileSync(bad, source);
+    const before = plans.map(plan => fs.readFileSync(path.join(root, plan.artifact.target), 'utf8'));
+    assert.throws(() => autoPatch(root, home), /unrecognized content/);
+    assert.deepEqual(plans.map(plan => fs.readFileSync(path.join(root, plan.artifact.target), 'utf8')), before, 'incompatible fragment blocks the entire batch without writes');
+    assert.equal(fs.existsSync(home), false, 'failed planning creates no lock or backup directory');
+  }
+  const unrelated = '\n// synthetic unrelated host change\n';
+  fs.writeFileSync(bad, plans[0].result + unrelated);
+  assert.equal(planPatches(root, 'check')[0].compatibility, 'fragments', 'unknown whole-file hash with compatible fragments is accepted');
   assert.deepEqual(autoPatch(root, home), { state: 'restart-required', changed: 5, runtimeVerified: false });
+  assert.ok(fs.readFileSync(bad, 'utf8').endsWith(unrelated), 'automatic patch preserves unrelated host changes');
+  assert.equal(planPatches(root, 'revert')[0].result, plans[0].result + unrelated, 'revert preserves the exact compatible host variant');
   assert.ok(planPatches(root, 'check').every(plan => plan.state === 'patched'));
   const storage = path.join(home, 'dsh-model-groups');
   const backupRoot = path.join(storage, fs.readdirSync(storage)[0]);
@@ -42,6 +53,21 @@ test('automatic patch validates all inputs, backs up outside package and repeats
   assert.deepEqual(planPatches(root, 'check').map(plan => fs.statSync(plan.file).mtimeMs), stats);
 });
 
+
+test('startup activity checks live tasks and shared host processes without scanning configuration', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-startup-activity-'));
+  t.after(() => { assert.equal(fs.realpathSync(directory), directory); assert.ok(path.basename(directory).startsWith('dsh-startup-activity-')); fs.rmSync(directory, { recursive: true }); });
+  assert.equal(startupActivity({}, '/runtime', directory), null);
+  assert.equal(startupActivity({ agents: { list: () => [{ status: 'running', phase: { kind: 'idle' } }] } }, '/runtime', directory), 'active-tasks');
+  assert.equal(startupActivity({ agents: { list: () => [{ status: 'idle', phase: { kind: 'maintenance' } }] } }, '/runtime', directory), 'active-tasks');
+  assert.equal(startupActivity({ agents: { list: () => [{ status: 'idle' }] } }, '/runtime', directory), null);
+  const process = path.join(directory, '99123'); fs.mkdirSync(process);
+  fs.writeFileSync(path.join(process, 'cmdline'), '/usr/bin/node\0/other/node_modules/@deepseek-ai/dsh/lib/bin.js\0');
+  assert.equal(startupActivity({}, '/runtime', directory), null);
+  fs.writeFileSync(path.join(process, 'cmdline'), '/usr/bin/node\0/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js\0');
+  assert.equal(startupActivity({}, '/runtime', directory), 'other-engine');
+  assert.equal(startupActivity({}, '/runtime', path.join(directory, 'missing')), 'activity-unverified');
+});
 
 test('host discovery survives unsupported version and missing or unknown program targets without permitting writes', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-discovery-test-'));

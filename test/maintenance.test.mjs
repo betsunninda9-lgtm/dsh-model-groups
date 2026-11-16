@@ -6,7 +6,7 @@ import test from 'node:test';
 import { Readable } from 'node:stream';
 import { spawnSync } from 'node:child_process';
 import { ARTIFACTS, applyPlan, planPatches, sha256 } from '../scripts/native-patches.mjs';
-import { MAINTENANCE_PROTOCOL, createMaintenance, maintenanceHandler, restorationPending, maintenanceStorage } from '../src/maintenance.js';
+import { MAINTENANCE_PROTOCOL, createMaintenance, maintenanceHandler, restorationPending, maintenanceStorage, patchStatus } from '../src/maintenance.js';
 import { autoPatch } from '../src/auto-patch.js';
 
 function fixture(t, overrides = {}) {
@@ -253,12 +253,73 @@ test('apply rejects active inspection blockers and unknown file states', async t
   applyPlan(planPatches(f.root,'revert',f.artifacts),path.join(f.home,'isolated-backup'));
   assert.equal((await f.controller.snapshot()).canApply,false);
  });
- test('activation does not invoke automatic patching', async () => {
-  const {apply}=await import('../src/index.js');
-  let injections=0;
-  apply({logger:{info(){},warn(){},error(){}},inject(){injections++;}});
-  assert.equal(injections,1);
- });
+test('startup automatically repairs replaced host programs and shares restart evidence with maintenance', async t => {
+  const f = fixture(t);
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.home, 'replacement-backup'));
+  assert.equal(patchStatus(f.root, f.home, f.artifacts).state, 'needs-repair');
+  const { recoverOnStartup } = await import('../src/index.js');
+  const logs = [];
+  const ctx = { logger: { info: value => logs.push(value), warn: value => logs.push(value), error: value => logs.push(value) } };
+  const options = { artifacts: f.artifacts, activity: () => null };
+  assert.equal(recoverOnStartup(ctx, f.root, f.home, options).changed, 5);
+  assert.deepEqual(patchStatus(f.root, f.home, f.artifacts), { state: 'ready', failed: false, restartRequired: true });
+  assert.equal((await f.controller.snapshot()).restartRequired, true);
+  const stats = f.files.map(file => fs.statSync(file).mtimeMs);
+  assert.equal(recoverOnStartup(ctx, f.root, f.home, options).changed, 0);
+  assert.deepEqual(f.files.map(file => fs.statSync(file).mtimeMs), stats);
+  assert.ok(logs.length);
+});
+
+test('startup respects explicit close across host replacement and exposes disabled status', async t => {
+  const f = fixture(t), state = await f.controller.snapshot();
+  await f.controller.restore({ ...confirmation(state.token), action: 'restore-only' });
+  assert.equal(autoPatch(f.root, f.home, { artifacts: f.artifacts, activity: () => { throw Error('must not probe disabled state'); } }).state, 'restore-pending');
+  assert.equal(patchStatus(f.root, f.home, f.artifacts).state, 'disabled');
+  assert.equal(patchStatus(f.root, f.home, f.artifacts).failed, false);
+  assert.ok(planPatches(f.root, 'check', f.artifacts).every(plan => plan.state === 'pristine'));
+});
+
+test('startup defers active tasks without writes and rechecks activity inside the lock', async t => {
+  const f = fixture(t);
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.home, 'replacement-backup'));
+  const sources = f.files.map(file => fs.readFileSync(file, 'utf8'));
+  assert.equal(autoPatch(f.root, f.home, { artifacts: f.artifacts, activity: () => 'active-tasks' }).state, 'deferred');
+  let checks = 0;
+  const result = autoPatch(f.root, f.home, { artifacts: f.artifacts, activity: () => ++checks === 1 ? null : 'other-engine' });
+  assert.equal(result.state, 'deferred');
+  assert.equal(result.reason, 'other-engine');
+  assert.equal(fs.existsSync(path.join(maintenanceStorage(f.root, f.home), 'patch.lock')), false);
+  assert.deepEqual(f.files.map(file => fs.readFileSync(file, 'utf8')), sources);
+  assert.equal((await f.controller.snapshot()).restartRequired, false);
+});
+
+test('startup failures are visible without pretending a usable installation was found', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.files[0], 'unknown host program');
+  const { recoverOnStartup } = await import('../src/index.js');
+  const ctx = { logger: { info() {}, warn() {}, error() {} } };
+  assert.equal(recoverOnStartup(ctx, f.root, f.home, { artifacts: f.artifacts }).state, 'failed');
+  assert.deepEqual(patchStatus(f.root, f.home, f.artifacts), { state: 'conflict', failed: true, restartRequired: false });
+});
+
+test('deferred recovery retries on a managed timer, stops on completion or failure, and disposes cleanly', async () => {
+  const { retryDeferredRecovery } = await import('../src/index.js');
+  for (const terminal of ['restart-required', 'failed', 'restore-pending']) {
+    let tick, dispose, cleared = 0, calls = 0;
+    const results = [];
+    const ctx = { interval(callback, delay) { assert.equal(delay, 5000); tick = callback; return () => { cleared++; }; },
+      on(event, callback) { assert.equal(event, 'dispose'); dispose = callback; } };
+    retryDeferredRecovery(ctx, () => ++calls === 1 ? null : { state: terminal }, result => results.push(result.state));
+    tick(); assert.equal(cleared, 0); assert.deepEqual(results, []);
+    tick(); assert.equal(cleared, 1); assert.deepEqual(results, [terminal]);
+    tick(); assert.equal(calls, 2);
+    dispose(); assert.equal(cleared, 1);
+  }
+  let tick, dispose, cleared = 0;
+  const ctx = { setInterval(callback) { tick = callback; return () => { cleared++; }; }, on(event, callback) { dispose = callback; } };
+  retryDeferredRecovery(ctx, () => { throw Error('disposed callbacks must not run'); }, () => {});
+  dispose(); tick(); assert.equal(cleared, 1);
+});
 
 test('real backend snapshots validate frontend after all manual actions', async t => {
   const {maintenanceSnapshot}=await import('../src/maintenance-state.js');

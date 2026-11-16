@@ -70,11 +70,18 @@ for (const [action, label, phase] of [
   ['apply', '启用多密钥', 'applied'],
   ['restore-only', '关闭多密钥', 'restored'],
   ['restore-and-uninstall', '关闭并卸载插件', 'removed'],
-]) test(`${action} refreshes before confirmed POST with common literal`, async () => {
+]) test(`${action} refreshes before POST; only close and uninstall require a dialog`, async () => {
   const initial = sample({ canApply: true });
   const app = ui([response(initial), response(initial), response(sample({ phase, canApply: false, canRestoreOnly: false, canRestore: false, token: null, restartRequired: true,
     patches: [{ state: phase === 'applied' ? 'patched' : 'pristine' }] }))]);
-  await app.settle(); app.click(label); assert.equal(app.calls.length, 1); app.click('确认执行');
+  await app.settle(); app.click(label);
+  if (action === 'apply') {
+    assert.equal(app.button('确认执行'), undefined, 'enable starts directly without a second dialog');
+  } else {
+    assert.equal(app.calls.length, 1, 'close and uninstall await one explicit confirmation');
+    assert.ok(app.button('确认执行'));
+    app.click('确认执行');
+  }
   assert.equal(app.button(label).props.disabled, true);
   await app.settle();
   assert.deepEqual(app.calls.map(call => call[1].method), ['GET', 'GET', 'POST']);
@@ -125,6 +132,19 @@ for (const changed of [sample({ token: 'new-token' }), sample({ canRestore: fals
     app.click('关闭并卸载插件'); app.click('确认执行'); await app.settle();
     assert.equal(app.calls.length, 2); assert.ok(app.calls.every(call => call[1].method === 'GET'));
     assert.match(app.text(), /未执行操作/); assert.equal(app.button('确认执行'), undefined); app.dispose();
+  });
+}
+
+for (const changed of [sample({ canApply: true, token: 'new-token' }), sample({ canApply: false }), sample({ canApply: true, pluginVersion: '0.3.5' })]) {
+  test('direct apply still aborts on changed preflight state without POST', async () => {
+    const initial = sample({ canApply: true });
+    const app = ui([response(initial), response(changed)]); await app.settle();
+    app.click('启用多密钥');
+    assert.equal(app.button('确认执行'), undefined);
+    await app.settle();
+    assert.deepEqual(app.calls.map(call => call[1].method), ['GET', 'GET']);
+    assert.match(app.text(), /未执行操作|版本不一致/);
+    assert.deepEqual(app.removed, []); app.dispose();
   });
 }
 
@@ -193,10 +213,12 @@ test('patched updates survive sanitization and show an actionable update button'
   await app.settle();
   assert.equal(app.button('更新多密钥补丁').props.disabled, false);
   assert.match(app.text(), /更新可用/);
-  assert.match(app.text(), /新版更新待确认/);
+  assert.match(app.text(), /可更新补丁/);
   assert.doesNotMatch(app.text(), /多密钥已启用（磁盘状态）/);
   assert.equal(app.button('启用多密钥'), undefined);
-  app.click('更新多密钥补丁'); app.click('确认执行'); await app.settle();
+  app.click('更新多密钥补丁');
+  assert.equal(app.button('确认执行'), undefined, 'update starts directly without a second dialog');
+  await app.settle();
   assert.equal(JSON.parse(app.calls[2][1].body).action, 'apply');
   assert.match(app.text(), /需要重启 DSH 引擎/); app.dispose();
   assert.throws(() => maintenanceSnapshot(sample({ patches: [{ state: 'patched', updateAvailable: 'yes' }] })));

@@ -11,21 +11,30 @@ export function apply(ctx) {
   }, ModelGroupsSettingsPage));
   const providersForm = ctx.configForms?.get('llm-pi-ai');
   let statusDisposed = false;
-  let statusNotice;
-  if (typeof fetch === 'function') Promise.resolve().then(() => fetch('/dsh-model-groups/status', { credentials: 'same-origin', cache: 'no-store' }))
-    .then(response => { if (!response.ok) throw new Error('status unavailable'); return response.json(); })
-    .then(status => {
-      if (statusDisposed || (!status.restartRequired && !status.failed)) return;
+  let statusNotice, statusTimer;
+  function showPatchStatus(status) {
+    if (statusDisposed) return;
+    const message = patchStatusMessage(status);
+    statusNotice?.remove();
+    statusNotice = undefined;
+    if (message) {
       statusNotice = document.createElement('div');
       statusNotice.dataset.plugin = 'dsh-model-groups';
       statusNotice.setAttribute('role', 'status');
       statusNotice.style.cssText = 'position:fixed;bottom:16px;right:16px;max-width:min(360px,80vw);z-index:1000;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#222);padding:12px;border:1px solid currentColor;border-radius:8px;box-sizing:border-box;pointer-events:none;';
-      statusNotice.textContent = status.failed
-        ? '无法检查多密钥功能所需的 DSH 文件。请打开「设置 → 模型分组」查看详情，不要手动覆盖文件。'
-        : 'DSH 程序文件已更新。请先保存草稿，再重启 DSH 引擎并刷新网页。重启前请暂缓修改模型设置。';
+      statusNotice.textContent = message;
       document.body.appendChild(statusNotice);
-    }).catch(() => {});
-  ctx.on('dispose', () => { statusDisposed = true; statusNotice?.remove(); });
+    }
+    if (status.state === 'deferred') statusTimer = setTimeout(refreshPatchStatus, 15_000);
+  }
+  function refreshPatchStatus() {
+    if (statusDisposed) return;
+    Promise.resolve().then(() => fetch('/dsh-model-groups/status', { credentials: 'same-origin', cache: 'no-store' }))
+      .then(response => { if (!response.ok) throw new Error('status unavailable'); return response.json(); })
+      .then(showPatchStatus).catch(() => {});
+  }
+  if (typeof fetch === 'function') refreshPatchStatus();
+  ctx.on('dispose', () => { statusDisposed = true; clearTimeout(statusTimer); statusNotice?.remove(); });
   const onStorage = event => {
     if (event.key === STORAGE_KEY || event.key === null) groupPreferences.sync(event.key === null ? null : event.newValue);
   };

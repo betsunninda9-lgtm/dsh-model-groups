@@ -38,6 +38,12 @@ for (const file of candidates) {
 }
 // This tiny fixture is the COMPLETE pristine delta measured from the uploaded
 // program, not a guessed cancellation implementation. Its exact hash is checked.
+if (bases.has(cancellationDelta.resultSha256)) {
+  const reconstructed = transformSource(bases.get(cancellationDelta.resultSha256), cancellationDelta, true);
+  const supplied = bases.get(cancellationDelta.baseSha256);
+  if (supplied !== undefined) assert.equal(reconstructed, supplied, 'reverse delta must equal the complete supplied pristine program');
+  bases.set(cancellationDelta.baseSha256, reconstructed);
+}
 if (bases.has(cancellationDelta.baseSha256)) {
   const reconstructed = transformSource(bases.get(cancellationDelta.baseSha256), cancellationDelta);
   const supplied = bases.get(cancellationDelta.resultSha256);

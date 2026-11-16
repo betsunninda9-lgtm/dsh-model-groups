@@ -13,6 +13,35 @@ const pluginVersion = pluginPackage.version;
 // remains unverified; checking disk must never create persistent restart state.
 const processChangesKey = Symbol.for('dsh-model-groups.maintenance.process-changes.v1');
 const processChanges = globalThis[processChangesKey] ??= new Map();
+export function patchRestartRequired(root) {
+  return (processChanges.get(fs.realpathSync(root))?.length ?? 0) > 0;
+}
+
+// All patch writers share process-local evidence, including failed transactions
+// that left an observed replacement on disk. HMR must never erase this evidence.
+export function changePatchFiles(root, plans, backupDirectory) {
+  const rootKey = fs.realpathSync(root);
+  try { return applyPlan(plans, backupDirectory); }
+  finally {
+    const changes = plans.flatMap(plan => {
+      try {
+        const current = fs.readFileSync(plan.file, 'utf8');
+        return plan.source !== plan.result && current === plan.result
+          ? [{ file: plan.file, before: sha256(plan.source), after: sha256(current) }] : [];
+      } catch { return []; }
+    });
+    if (changes.length) processChanges.set(rootKey, [...(processChanges.get(rootKey) ?? []), ...changes]);
+  }
+}
+
+export function patchStatus(root, home, artifacts) {
+  const compatibility = inspectPatches(root, artifacts);
+  const disabled = restorationPending(root, home);
+  const ready = compatibility.files.length === 5 && compatibility.files.every(file => file.code === 'ready');
+  return { restartRequired: patchRestartRequired(root), failed: !disabled && !ready,
+    state: disabled ? 'disabled' : ready ? 'ready' : compatibility.files.some(file => file.state === 'conflict') ? 'conflict' : 'needs-repair' };
+}
+
 export function maintenanceStorage(root, home) {
   return path.join(home, BUNDLE_NAME, sha256(fs.realpathSync(root)).slice(0, 16));
 }
@@ -35,25 +64,10 @@ export function createUnavailableMaintenance() {
 /** Local-only transaction. Inspection and removal are injected to keep tests off the live host. */
 export function createMaintenance({ root, home, inspect, manager, artifacts, now = Date.now }) {
   let phase = 'idle', busy = false, ticket;
-  const rootKey = fs.realpathSync(root);
   const storage = maintenanceStorage(root, home);
   const marker = path.join(storage, 'restore-pending.json');
-  const restartRequired = () => (processChanges.get(rootKey)?.length ?? 0) > 0;
-  function changeFiles(plans) {
-    try { applyPlan(plans, path.join(storage, 'backups')); }
-    finally {
-      // Record actual observed disk changes, not an attempted/no-op operation.
-      // Also retain evidence if verification later fails or a partial write survives.
-      const changes = plans.flatMap(plan => {
-        try {
-          const current = fs.readFileSync(plan.file, 'utf8');
-          return plan.source !== plan.result && current === plan.result
-            ? [{ file: plan.file, before: sha256(plan.source), after: sha256(current) }] : [];
-        } catch { return []; }
-      });
-      if (changes.length) processChanges.set(rootKey, [...(processChanges.get(rootKey) ?? []), ...changes]);
-    }
-  }
+  const restartRequired = () => patchRestartRequired(root);
+  const changeFiles = plans => changePatchFiles(root, plans, path.join(storage, 'backups'));
   const patchPlans = () => planPatches(root, 'revert', artifacts);
   const generic = (code, message) => ({ code, message });
   async function assessment() {
