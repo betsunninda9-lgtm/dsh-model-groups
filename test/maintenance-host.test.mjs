@@ -84,7 +84,14 @@ test('inspection reads fixture profiles only and blocks other-profile residuals 
   };
   const inspect = createHostInspection(ctx, root, home);
   const before = fs.readFileSync(path.join(home, 'profiles/other/patch.json'), 'utf8');
+  const originalRead = ctx.sessionQuery.readSession;
+  let historyReads = 0;
+  ctx.sessionQuery.readSession = async (...args) => { historyReads++; return originalRead(...args); };
+  const quick = await inspect({ detailed: false });
+  assert.equal(historyReads, 0, 'ordinary status never reads historical sessions');
+  assert.ok(!quick.blockers.some(b => b.code === 'cross_profile_bundle'));
   const result = await inspect();
+  assert.equal(historyReads, 1, 'explicit detailed inspection still reads dependencies');
   assert.ok(result.blockers.some(b => b.code === 'cross_profile_bundle'));
   assert.ok(result.blockers.some(b => b.code === 'key_config_dependency'));
   assert.ok(result.blockers.some(b => b.code === 'alias_dependency'));

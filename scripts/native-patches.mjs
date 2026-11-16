@@ -138,9 +138,60 @@ function planPatchFiles(dshRoot, mode, artifactDirectory, names) {
 }
 
 
+// Only public, read-only snapshots are cached. Never reuse source/result plans:
+// apply/revert and applyPlan retain their full validation and concurrent-edit checks.
+const inspectionCache = new Map();
+function inspectionDependencies(root, artifacts) {
+  const dependencies = new Set([root, artifacts, path.join(pluginRoot, 'package.json'),
+    path.join(root, 'package.json'), path.join(root, 'node_modules/@deepseek-ai/dsh/package.json')]);
+  for (const id of ARTIFACTS) {
+    const manifestPath = path.join(artifacts, id);
+    dependencies.add(manifestPath);
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const prefix = `node_modules/${manifest.packageName}/`;
+      if (!/^@deepseek-ai\/dsh-[a-z-]+$/.test(manifest.packageName) || typeof manifest.target !== 'string'
+        || !manifest.target.startsWith(prefix) || manifest.target.includes('..') || manifest.target.includes('\\')) continue;
+      dependencies.add(path.resolve(root, manifest.target));
+      dependencies.add(path.join(root, 'node_modules', manifest.packageName, 'package.json'));
+    } catch { /* Missing/invalid manifests are tracked by their own stat. */ }
+  }
+  return [...dependencies];
+}
+function inspectionFingerprint(dependencies) {
+  return JSON.stringify(dependencies.map(file => {
+    try {
+      // ctime detects same-size rewrites even when a caller restores mtime;
+      // realpath and inode detect replacement and symlink changes. Nanoseconds
+      // avoid hiding multiple writes in the same millisecond.
+      const stat = fs.lstatSync(file, { bigint: true });
+      const resolved = stat.isSymbolicLink() ? fs.statSync(file, { bigint: true }) : stat;
+      const signature = value => ['dev', 'ino', 'mode', 'size', 'mtimeNs', 'ctimeNs'].map(key => String(value[key]));
+      return [file, fs.realpathSync(file), ...signature(stat), ...signature(resolved)];
+    } catch (error) { return [file, error.code ?? 'unavailable']; }
+  }));
+}
+
 /** Diagnose each program independently, without weakening the all-or-nothing planner.
  * Output is a closed schema: program hashes/versions only, never paths or errors. */
 export function inspectPatches(dshRoot, artifactDirectory = path.join(pluginRoot, 'native')) {
+  const root = path.resolve(dshRoot), artifacts = path.resolve(artifactDirectory);
+  const key = JSON.stringify([root, artifacts]);
+  const cached = inspectionCache.get(key);
+  if (cached && inspectionFingerprint(cached.dependencies) === cached.fingerprint) return structuredClone(cached.snapshot);
+  const manifestPaths = ARTIFACTS.map(id => path.join(artifacts, id));
+  const manifestsBefore = inspectionFingerprint(manifestPaths);
+  const dependencies = inspectionDependencies(root, artifacts);
+  const before = inspectionFingerprint(dependencies);
+  const snapshot = inspectPatchesFresh(root, artifacts);
+  // Do not retain an observation collected while the host was being replaced.
+  if (manifestsBefore === inspectionFingerprint(manifestPaths) && before === inspectionFingerprint(dependencies)) {
+    if (inspectionCache.size >= 16) inspectionCache.delete(inspectionCache.keys().next().value);
+    inspectionCache.set(key, { dependencies, fingerprint: before, snapshot: structuredClone(snapshot) });
+  } else inspectionCache.delete(key);
+  return snapshot;
+}
+function inspectPatchesFresh(dshRoot, artifactDirectory) {
   const pkg = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'package.json'), 'utf8'));
   let root, hostVersion = null;
   try {

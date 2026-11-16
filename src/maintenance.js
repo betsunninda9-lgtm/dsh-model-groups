@@ -70,11 +70,17 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
   const changeFiles = plans => changePatchFiles(root, plans, path.join(storage, 'backups'));
   const patchPlans = () => planPatches(root, 'revert', artifacts);
   const generic = (code, message) => ({ code, message });
-  async function assessment() {
+  async function assessment({ fresh = false, detailed = false } = {}) {
     const blockers = [];
     let plans = [], removable = false, compatibility;
     try {
-      plans = patchPlans();
+      if (fresh) plans = patchPlans();
+      else {
+        const disk = inspectPatches(root, artifacts);
+        if (!disk.files.length || disk.files.some(p => !['ready', 'update_available', 'not_applied', 'unsupported_patch_build'].includes(p.code))) throw new Error('conflict');
+        plans = disk.files.map(p => ({ name: p.id, state: p.state, updateAvailable: p.code === 'update_available', applySupported: p.code !== 'unsupported_patch_build',
+          observedSha256: p.observedSha256, baseSha256: p.baseSha256, targetSha256: p.targetSha256, artifact: { version: p.installedVersion } }));
+      }
       if (plans.some(plan => plan.applySupported === false)) blockers.push(generic('UNSUPPORTED_PATCH_BUILD', '此宿主构建仅能识别旧补丁，尚无经过验证的新版协议补丁；不会执行不完整更新。仍可关闭或卸载。'));
     }
     catch { blockers.push(generic('PATCH_CONFLICT', '宿主版本或文件校验不匹配；未修改任何宿主文件，请先处理冲突。')); }
@@ -83,7 +89,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
         observedSha256: p.observedSha256, baseSha256: p.baseSha256, targetSha256: p.targetSha256 })) } : inspectPatches(root, artifacts);
     compatibility.pluginVersion = pluginVersion;
     try {
-      const report = await inspect();
+      const report = await inspect({ detailed });
       if (!report || !Array.isArray(report.blockers) || typeof report.fingerprint !== 'string') throw new Error('inspection');
       blockers.push(...report.blockers);
     } catch { blockers.push(generic('INSPECTION_FAILED', '部分配置和会话使用情况未能检查；关闭后可能需要重新配置普通模型。')); }
@@ -99,7 +105,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     const hardCodes = new Set(['patch_conflict', 'unsupported_patch_build', 'active_turns', 'other_process', 'not_removable', 'manager_unavailable']);
     const warnings = blockers.filter(b => !hardCodes.has(b.code.toLowerCase()));
     const hard = blockers.filter(b => hardCodes.has(b.code.toLowerCase()));
-    return { plans, compatibility, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([pluginVersion, compatibility, hard, removable, plans.map(p => [p.name, sha256(p.source), !!p.updateAvailable, p.applySupported, sha256(JSON.stringify(p.artifact))])])) };
+    return { plans, compatibility, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([pluginVersion, compatibility, hard, removable, plans.map(p => [p.name, p.observedSha256, !!p.updateAvailable, p.applySupported])])) };
   }
   function view(report, executing = false) {
     const valid = report.plans.length > 0 && !report.blockers.some(b => b.code.toLowerCase() === 'patch_conflict');
@@ -138,7 +144,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
       // Same inter-process lock as automatic installation. Never remove somebody else's lock.
       fs.mkdirSync(lock, { mode: 0o700 }); locked = true;
-      const report = await assessment();
+      const report = await assessment({ fresh: true, detailed: action !== 'apply' });
       const permissions = view(report, true);
        const permitted = action === 'apply' ? permissions.canApply : action === 'restore-only' ? permissions.canRestoreOnly : permissions.canRestore;
        if (!permitted || report.stamp !== expected.stamp) throw generic('STATE_CHANGED', '文件或任务状态发生变化，请确认没有任务运行后重试。');
