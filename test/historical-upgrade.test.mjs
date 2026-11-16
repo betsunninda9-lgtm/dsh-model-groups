@@ -1,3 +1,4 @@
+import { structuralRevision } from '../scripts/structural-patches.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -120,7 +121,12 @@ function pristineProgram(source, artifact) {
   const patched = revisions.filter(revision => revision.resultSha256 === hash);
   assert.ok(patched.length <= 1, 'explicit program must have an unambiguous patched identity');
   const revision = patched[0] ?? revisions.find(value => value.baseSha256 === hash);
-  assert.ok(revision, 'explicit program must match a complete verified pristine/patched SHA256');
+  if (!revision) {
+    const compatible = structuralRevision(source, revisions);
+    assert.ok(compatible, 'explicit program must be a known or structurally compatible build');
+    assert.equal(structuralRevision(compatible.latest, revisions).original, compatible.original);
+    return compatible.original;
+  }
   const pristine = patched.length ? transformSource(source, revision, true) : source;
   assert.equal(sha256(pristine), revision.baseSha256);
   const forward = transformSource(pristine, revision);
@@ -160,18 +166,23 @@ test('every historical release directly upgrades five real program copies, prese
     return source;
   };
   const installed = fs.realpathSync(process.env.DSH_ROOT);
+  const installedPristine = planPatches(installed, 'revert');
   const inputs = ARTIFACTS.map(name => {
     const artifact = currentArtifacts.get(name), file = path.resolve(installed, artifact.target);
     assert.ok(file.startsWith(installed + path.sep));
     assert.equal(fs.realpathSync(file), file, 'live manifest-owned program path is canonical');
-    return { name, artifact, pristine: pristineProgram(readProgram(file), artifact) };
+    const source = readProgram(file);
+    const plan = installedPristine.find(item => item.name === name);
+    assert.equal(plan.source, source);
+    assert.equal(sha256(plan.result), plan.baseSha256);
+    return { name, artifact, pristine: plan.result };
   });
   const pi = inputs.find(input => input.name === 'pi-ai.patch.json');
   const delta = readJson('test/fixtures/pi-ai/credential-cancellation.delta.json');
   const bases = new Map();
   const addBase = source => {
     const hash = sha256(source);
-    assert.ok(candidates(pi.artifact).some(revision => revision.baseSha256 === hash));
+    assert.ok(candidates(pi.artifact).some(revision => revision.baseSha256 === hash) || structuralRevision(source, candidates(pi.artifact)), 'complete source must be known or structurally compatible');
     if (bases.has(hash)) assert.equal(bases.get(hash), source);
     bases.set(hash, source);
   };

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sha256, transformSource } from '../scripts/native-patches.mjs';
+import { structuralRevision } from '../scripts/structural-patches.mjs';
 import { buildProtocolArtifact, protocolReplacements } from '../scripts/pi-ai-protocol.mjs';
 import { buildModelHierarchy } from '../src/hierarchy.js';
 import { applyCapabilityBatch, materializeCapabilityEntry, mergeCapabilityModels } from '../src/capability-defaults.js';
@@ -27,11 +28,21 @@ if (fs.existsSync(backups)) for (const name of fs.readdirSync(backups)) {
   if (/^dsh-llm-pi-ai-index\.js-[0-9a-f]{64}\.js$/.test(name)) candidates.add(path.join(backups, name));
 }
 const bases = new Map();
+const structuralOutputs = new Map();
+const structuralCases = [];
 for (const file of candidates) {
   const source = fs.readFileSync(file, 'utf8');
   const hash = sha256(source);
   const revision = revisions(artifact).find(value => value.resultSha256 === hash) ?? revisions(artifact).find(value => value.baseSha256 === hash);
-  assert.ok(revision, `Unrecognized explicitly supplied pi-ai source: ${file}`);
+  if (!revision) {
+    const compatible = structuralRevision(source, revisions(artifact));
+    assert.ok(compatible, `Unrecognized explicitly supplied pi-ai source: ${file}`);
+    const baseSha256 = sha256(compatible.original);
+    bases.set(baseSha256, compatible.original);
+    structuralOutputs.set(baseSha256, compatible.latest);
+    if (!structuralCases.some(item => item.baseSha256 === baseSha256)) structuralCases.push({ baseSha256, resultSha256: sha256(compatible.latest), structural: true });
+    continue;
+  }
   const pristine = hash === revision.baseSha256 ? source : transformSource(source, revision, true);
   assert.equal(sha256(pristine), revision.baseSha256);
   bases.set(revision.baseSha256, pristine);
@@ -175,9 +186,16 @@ test('real host protocol tests are configured', { skip: bases.size > 0 && requir
   assert.ok(bases.size > 0);
 });
 
-for (const revision of current) {
+for (const revision of [...current, ...structuralCases]) {
   const pristine = bases.get(revision.baseSha256);
-  test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: roundtrip, legacy upgrade, generator reproducibility`, { skip: !pristine && 'Supply this pristine/patched bundle via PI_AI_SOURCES' }, () => {
+  if (revision.structural) test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: structural current roundtrip`, () => {
+    const patched = structuralRevision(pristine, revisions(artifact));
+    assert.equal(patched.latest, structuralOutputs.get(revision.baseSha256));
+    const reverted = structuralRevision(patched.latest, revisions(artifact));
+    assert.equal(reverted.original, pristine);
+    assert.equal(reverted.latest, patched.latest);
+  });
+  else test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: roundtrip, legacy upgrade, generator reproducibility`, { skip: !pristine && 'Supply this pristine/patched bundle via PI_AI_SOURCES' }, () => {
     const source = transformSource(pristine, revision);
     assert.equal(sha256(source), revision.resultSha256);
     assert.equal(transformSource(source, revision, true), pristine);
@@ -196,7 +214,7 @@ for (const revision of current) {
 
   const enabled = pristine && require;
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: saved group ranks reach live loader, schema, YAML reload and picker`, { skip: !enabled }, async () => {
-    const module = runtime(transformSource(pristine, revision));
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision));
     const { deepEqual } = require('@deepseek-ai/cosmokit');
     const { Entry } = require('@deepseek-ai/cordis-plugin-loader');
     const yaml = require('yaml');
@@ -240,7 +258,7 @@ for (const revision of current) {
     assert.equal(module.keyEntryProfile.dict.sortOrder.meta.required, undefined);
   });
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: batch metadata never forces existing raw capabilities and legacy migration preserves runtime`, { skip: !enabled }, async () => {
-    const module = runtime(transformSource(pristine, revision), { provider: 'gateway', input: ['text', 'image'], reasoning: true });
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision), { provider: 'gateway', input: ['text', 'image'], reasoning: true });
     const providers = config();
     providers.gateway.keyEntries = { batch: { name: 'Batch', apiKeyEnv: 'BATCH_KEY', capabilityBatch: { vision: true, reasoning: true }, models: [{ id: 'catalog-model', input: ['text'], reasoningEfforts: false }] } };
     const checked = schemaProviders(module, providers);
@@ -279,7 +297,7 @@ for (const revision of current) {
   });
 
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: group capability policy reaches schema, catalog and actual dispatch`, { skip: !enabled }, async () => {
-    const module = runtime(transformSource(pristine, revision), { provider: 'gateway', input: ['text', 'image'], reasoning: true, thinkingLevelMap: { low: 'catalog-low', medium: 'catalog-mid', high: 'catalog-high' } });
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision), { provider: 'gateway', input: ['text', 'image'], reasoning: true, thinkingLevelMap: { low: 'catalog-low', medium: 'catalog-mid', high: 'catalog-high' } });
     const providers = config();
     providers.gateway.keyEntries = {
       follow: { name: 'Follow', apiKeyEnv: 'FOLLOW_KEY', capabilityDefaults: { vision: true, reasoning: true }, models: [{ id: 'catalog-model' }, { id: 'new-model' }, { id: 'custom', reasoningEfforts: { off: null, minimal: 'vendor-tiny', xhigh: 'vendor-extra' } }] },
@@ -321,7 +339,7 @@ for (const revision of current) {
   });
 
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: invalid capability metadata fails closed even on inactive entries`, { skip: !enabled }, () => {
-    const module = runtime(transformSource(pristine, revision));
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision));
     for (const defaults of [null, [], {}, { vision: true }, { vision: true, reasoning: 'yes' }, { vision: true, reasoning: true, other: false }]) for (const multiKey of [true, false]) for (const validation of ['strict', 'deferred']) {
       const providers = config({ multiKey });
       providers.gateway.keyEntries.inherited.capabilityDefaults = defaults;
@@ -341,7 +359,7 @@ for (const revision of current) {
   });
 
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: actual optional schema and strict/deferred fail-closed resolver`, { skip: !enabled }, () => {
-    const module = runtime(transformSource(pristine, revision));
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision));
     const inputs = config();
     const checked = schemaProviders(module, inputs);
     assert.equal(checked.gateway.keyEntries.inherited.api, undefined);
@@ -374,7 +392,7 @@ for (const revision of current) {
   });
 
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: actual adapter dispatch and usage retain exact owner/protocol`, { skip: !enabled }, async () => {
-    const module = runtime(transformSource(pristine, revision));
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision));
     let profiles = module.resolveProfiles(schemaProviders(module, config()));
     const keyReads = [];
     const adapter = new module.PiAiAdapter({ profiles: () => profiles, resolveApiKey: async (provider, owner) => { keyReads.push({ provider, id: owner.keyEntryId }); return `fake-test-${owner.keyEntryId ?? 'root'}`; } });
@@ -408,7 +426,7 @@ for (const revision of current) {
   });
 
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: absent override preserves catalog and disabled legacy behavior`, { skip: !enabled }, async () => {
-    const module = runtime(transformSource(pristine, revision));
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision));
     const providers = { 'catalog-route': { multiKey: true, models: [], keyEntries: { one: { name: 'No override', apiKeyEnv: 'ENTRY_API_KEY', models: [{ id: 'catalog-model' }] }, two: { name: 'Explicit', apiKeyEnv: 'SECOND_API_KEY', api: 'anthropic-messages', models: [{ id: 'catalog-model' }] } } } };
     const profiles = module.resolveProfiles(schemaProviders(module, providers));
     const entry = profiles.get('catalog-route').keyEntries.get('one');
@@ -427,7 +445,7 @@ for (const revision of current) {
   });
 
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: endpoint discovery uses inherited/explicit/draft API and native auth`, { skip: !enabled }, async () => {
-    const module = runtime(transformSource(pristine, revision));
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision));
     const profiles = module.resolveProfiles(schemaProviders(module, config()));
     const stored = module.storedDiscoveryProfile(profiles, async (_provider, owner) => `fake-probe-${owner.keyEntryId}`);
     assert.equal(stored('gateway', 'inherited').api, 'openai-completions');
@@ -459,7 +477,7 @@ for (const revision of current) {
   });
 
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: anthropic routes strip the trailing /v1 the SDK adds itself`, { skip: !enabled }, async () => {
-    const module = runtime(transformSource(pristine, revision));
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision));
     const adapter = new module.PiAiAdapter({ profiles: () => module.resolveProfiles(schemaProviders(module, config())), resolveApiKey: async () => 'fake-test-key' });
     const options = { provider: 'gateway', messages: [{ role: 'user', content: [{ type: 'text', text: 'offline test' }] }] };
     // A relay that publishes its root as `.../v1` works for OpenAI protocols,
@@ -484,7 +502,7 @@ for (const revision of current) {
   });
 
   test(`real pi-ai ${revision.baseSha256.slice(0, 12)}: empty entry API edits invalidate registration facts`, { skip: !enabled }, () => {
-    const module = runtime(transformSource(pristine, revision));
+    const module = runtime(structuralOutputs.get(revision.baseSha256) ?? transformSource(pristine, revision));
     const before = config();
     before.gateway.keyEntries.overridden.models = [];
     const after = structuredClone(before);

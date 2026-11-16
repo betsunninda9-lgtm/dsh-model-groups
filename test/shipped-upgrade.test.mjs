@@ -17,9 +17,10 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
   const installed = process.env.DSH_ROOT;
   if (!installed) { t.skip('Set DSH_ROOT to validate real bundles in isolated copies'); return; }
   const observed = planPatches(installed, 'check');
+  const pristinePlans = planPatches(installed, 'revert');
   const inputs = ARTIFACTS.map((name, i) => {
     const artifact = readArtifact('native/' + name), plan = observed[i];
-    const pristine = plan.state === 'patched' ? transformSource(plan.source, plan.artifact, true) : plan.source;
+    const pristine = pristinePlans[i].result;
     return { name, artifact, pristine };
   });
   const stableSettings = readArtifact('test/fixtures/settings-models/v0.3.5.json');
@@ -66,8 +67,12 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
   for (const input of inputs) fs.writeFileSync(path.join(beta1Artifacts, input.name), input.name === 'pi-ai.patch.json' ? beta1PiText : JSON.stringify(input.artifact));
 
   for (const [baseHash, pristinePi] of bases) for (const mode of ['pristine', 'v0.3.5', 'beta.5', '0.3.6-beta.1', 'v0.3.8', 'v0.3.9-beta.1', 'v0.3.9', 'v0.3.10-beta.1']) {
-    await t.test(`${baseHash.slice(0, 12)} ${mode} → current test build → exact pristine`, () => {
+    await t.test(`${baseHash.slice(0, 12)} ${mode} → current test build → exact pristine`, child => {
       const buildInputs = inputs.map(input => input.name === 'pi-ai.patch.json' ? { ...input, pristine: pristinePi } : input);
+      if (mode !== 'pristine' && buildInputs.some(input => !candidates(input.artifact).some(candidate => candidate.baseSha256 === sha256(input.pristine)))) {
+        child.skip('Historical manifests did not support this complete structural host build; no historical output fabricated');
+        return;
+      }
       const copy = path.join(temp, `${baseHash.slice(0, 12)}-${mode}`); fs.mkdirSync(copy);
       fs.writeFileSync(path.join(copy, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }));
       for (const input of buildInputs) {
@@ -131,7 +136,9 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
       for (const plan of after) {
         const input = buildInputs.find(item => item.name === plan.name);
         const latest = candidates(input.artifact).find(candidate => candidate.baseSha256 === sha256(input.pristine) && candidate.current === true) ?? input.artifact;
-        assert.equal(sha256(plan.source), latest.resultSha256);
+        const expected = apply.find(item => item.name === plan.name);
+        assert.equal(sha256(plan.source), expected.targetSha256);
+        if (candidates(input.artifact).some(candidate => candidate.baseSha256 === sha256(input.pristine))) assert.equal(sha256(plan.source), latest.resultSha256);
       }
       if (baseHash === delta.resultSha256 && mode !== 'pristine' && !isRecent(mode)) {
         const backup = path.join(copy, 'backups', `dsh-llm-pi-ai-index.js-${delta.legacyResultSha256}.js`);

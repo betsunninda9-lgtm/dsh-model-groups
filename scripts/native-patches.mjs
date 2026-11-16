@@ -17,11 +17,31 @@ const structuralTargets = new Set([
   'node_modules/@deepseek-ai/dsh-llm/lib/typert.remote-client.js',
   'node_modules/@deepseek-ai/dsh-api-remotes/lib/client.js',
 ]);
+// Generated request declarations may gain fields after apiKey. Match the named
+// interface string rather than requiring apiKey to be the last interface member.
+function declarationRecipes(source, candidates) {
+  if (candidates[0]?.target !== 'node_modules/@deepseek-ai/dsh-llm/lib/typert.host.js') return candidates;
+  const replacements = [];
+  for (const match of source.matchAll(/"declaration"\s*:\s*("(?:\\.|[^"\\])*")/g)) {
+    const declaration = JSON.parse(match[1]);
+    if (!declaration.startsWith('export interface LlmModelDiscoveryRequest {\n')) continue;
+    const anchor = '    apiKey?: string;\n';
+    const field = '    keyEntryId?: string;\n';
+    if (declaration.split(anchor).length !== 2 || declaration.split('keyEntryId').length > 2) return candidates;
+    if (declaration.includes('keyEntryId') && !declaration.includes(field)) return candidates;
+    const original = declaration.replace(field, '');
+    replacements.push({ before: JSON.stringify(original), after: JSON.stringify(declaration.includes(field) ? declaration : original.replace(anchor, anchor + field)) });
+  }
+  if (!replacements.length) return candidates;
+  return candidates.map(candidate => ({ ...candidate, replacements: candidate.replacements.flatMap(replacement =>
+    replacement.before === '    apiKey?: string;\\n}' && replacement.after === '    apiKey?: string;\\n    keyEntryId?: string;\\n}'
+      ? [...new Map(replacements.map(item => [item.before, item])).values()] : [replacement]) }));
+}
 const structuralCache = new Map();
 function compatibleRevision(source, candidates) {
   const key = sha256(source + JSON.stringify(candidates));
   if (structuralCache.has(key)) return structuralCache.get(key);
-  const revision = structuralRevision(source, candidates);
+  const revision = structuralRevision(source, declarationRecipes(source, candidates));
   if (revision) {
     for (const content of new Set([revision.original, revision.latest])) {
       const check = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: content, encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024 });

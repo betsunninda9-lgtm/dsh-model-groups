@@ -252,7 +252,15 @@ test('shipped artifacts are reversible against installed targets or skip when no
       const reverted = transformSource(patched, artifact, true);
       assert.equal(sha256(reverted), artifact.baseSha256, `${name}: reverse transform did not match baseSha256`);
     } else {
-      assert.fail(`Installed target ${artifact.target} has unrecognized content hash ${hash}`);
+      const forward = planPatches(dshRoot, 'apply').find(plan => plan.name === name);
+      const reverse = planPatches(dshRoot, 'revert').find(plan => plan.name === name);
+      assert.equal(forward.compatibility, 'fragments');
+      assert.equal(forward.baseSha256, reverse.baseSha256);
+      assert.equal(forward.targetSha256, reverse.targetSha256);
+      assert.equal(sha256(forward.result), forward.targetSha256);
+      assert.equal(sha256(reverse.result), reverse.baseSha256);
+      assert.equal(forward.source, source);
+
     }
   }
 });

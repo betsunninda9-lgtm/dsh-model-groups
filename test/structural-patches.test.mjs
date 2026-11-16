@@ -86,6 +86,29 @@ test('one missing changed region blocks all five targets before backups or write
   assert.equal(fs.existsSync(path.join(f.root, 'backups')), false);
 });
 
+test('generated discovery variants all receive keyEntryId while trailing headers and other declarations survive', t => {
+  const f = fixture(t);
+  const recipe = JSON.parse(fs.readFileSync(new URL('../native/llm-typert.host.patch.json', import.meta.url), 'utf8'));
+  const declaration = 'export interface LlmModelDiscoveryRequest {\n    provider?: string;\n    apiKey?: string;\n    headers?: Array<{ name: string; value: string; }>;\n}';
+  const schemas = Array.from({ length: 4 }, (_, i) => `const discovery${i} = z.object({\n${recipe.replacements[0].before}\n});\nconst json${i} = {${recipe.replacements[1].before}};\n`).join('');
+  const other = 'export interface OtherRequest {\n    apiKey?: string;\n}';
+  const original = schemas + `export const tools = [{"declaration":${JSON.stringify(declaration)}},{"declaration":${JSON.stringify(other)}}];\n`;
+  fs.writeFileSync(f.targets[2], original);
+  fs.writeFileSync(path.join(f.artifacts, ARTIFACTS[2]), JSON.stringify(recipe));
+  const plans = planPatches(f.root, 'apply', f.artifacts);
+  const result = plans[2].result;
+  assert.equal(result.split(recipe.replacements[0].after).length - 1, 4);
+  assert.equal(result.split(recipe.replacements[1].after).length - 1, 4);
+  assert.ok(result.includes(JSON.stringify(declaration.replace('    apiKey?: string;\n', '    apiKey?: string;\n    keyEntryId?: string;\n'))));
+  assert.ok(result.includes(JSON.stringify(other)), 'unrelated declarations are unchanged');
+  applyPlan(plans, path.join(f.root, 'backups'));
+  assert.equal(applyPlan(planPatches(f.root, 'apply', f.artifacts), path.join(f.root, 'backups')), 0);
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.root, 'backups'));
+  assert.equal(fs.readFileSync(f.targets[2], 'utf8'), original);
+  fs.writeFileSync(f.targets[2], original.replace(recipe.replacements[0].before, recipe.replacements[0].after));
+  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /unrecognized content/, 'partial schema patch must not be duplicated');
+});
+
 for (const patched of [false, true]) test(`real host with custom headers and unrelated changes: ${patched ? 'already patched' : 'pristine'} roundtrip`, t => {
   if (!process.env.DSH_ROOT) return t.skip('Set DSH_ROOT; only temporary copies are modified');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fragments-'));
@@ -99,7 +122,7 @@ for (const patched of [false, true]) test(`real host with custom headers and unr
     fs.writeFileSync(path.join(tmp, 'node_modules', plan.artifact.packageName, 'package.json'), JSON.stringify({ name: plan.artifact.packageName, version: '0.2.2-rc.1' }));
     let content = plan.result + '\n// custom mobile runtime build\n';
     // Mirrors an additive field next to the generated interrogation schema.
-    if (plan.name === 'llm-typert.host.patch.json') content = content.replace('    apiKey?: string;', '    headers?: Record<string, string>;\\n    apiKey?: string;');
+    if (plan.name === 'llm-typert.host.patch.json') content = content.replace('    apiKey?: string;', '    apiKey?: string;\\n    headers?: Array<{ name: string; value: string; }>;');
     fs.writeFileSync(file, content);
     originals.push(content);
   }
