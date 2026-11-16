@@ -29,7 +29,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-      # No dependencies or lockfile: no install step is needed.
+      - name: Install pinned parser dependency
+        run: npm ci --ignore-scripts
       - name: Check committed client bundle before rebuilding
         run: npm run check:build
       - name: Run automated tests

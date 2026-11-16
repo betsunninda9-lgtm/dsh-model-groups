@@ -45,6 +45,28 @@ function ui(responses) {
   };
 }
 
+test('automatic maintenance switch saves one preference request and follows server state', async () => {
+  const app = ui([response(sample({ preferences: { enabled: true, autoMaintenance: true } })),
+    response(sample({ preferences: { enabled: true, autoMaintenance: false } }))]);
+  await app.settle();
+  let toggle = app.inputs().find(input => input.props.role === 'switch');
+  assert.equal(toggle.props.checked, true); assert.equal(toggle.props.disabled, false);
+  toggle.props.onChange({ target: { checked: false } }); await app.settle();
+  assert.equal(app.calls.length, 2);
+  assert.deepEqual(JSON.parse(app.calls[1][1].body), { action: 'set-auto-maintenance', autoMaintenance: false, maintenanceProtocol: 2, clientVersion: pluginVersion });
+  toggle = app.inputs().find(input => input.props.role === 'switch');
+  assert.equal(toggle.props.checked, false);
+  assert.match(app.text(), /不消耗模型额度/);
+  app.dispose();
+});
+test('fold-only installation keeps auto maintenance switch off and disabled', async () => {
+  const app = ui([response(sample({ preferences: { enabled: false, autoMaintenance: false }, patches: [{ state: 'pristine' }], canApply: true }))]);
+  await app.settle();
+  const toggle = app.inputs().find(input => input.props.role === 'switch');
+  assert.equal(toggle.props.checked, false); assert.equal(toggle.props.disabled, true);
+  assert.equal(app.calls.length, 1); app.dispose();
+});
+
 test('page GETs only; opening and cancelling dialog never POSTs or exposes server data', async () => {
   const app = ui([response(sample())]); await app.settle();
   assert.equal(app.calls.length, 1); assert.equal(app.calls[0][1].method, 'GET');

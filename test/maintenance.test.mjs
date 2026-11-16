@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { ARTIFACTS, applyPlan, planPatches, sha256 } from '../scripts/native-patches.mjs';
 import { MAINTENANCE_PROTOCOL, createMaintenance, maintenanceHandler, restorationPending, maintenanceStorage, patchStatus } from '../src/maintenance.js';
 import { autoPatch } from '../src/auto-patch.js';
+import { readPatchPreferences, writePatchPreferences } from '../src/patch-preferences.js';
 
 function fixture(t, overrides = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-maintenance-test-'));
@@ -255,6 +256,7 @@ test('apply rejects active inspection blockers and unknown file states', async t
  });
 test('startup automatically repairs replaced host programs and shares restart evidence with maintenance', async t => {
   const f = fixture(t);
+  writePatchPreferences(f.root, f.home, { enabled: true, autoMaintenance: true });
   applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.home, 'replacement-backup'));
   assert.equal(patchStatus(f.root, f.home, f.artifacts).state, 'needs-repair');
   const { recoverOnStartup } = await import('../src/index.js');
@@ -281,6 +283,7 @@ test('startup respects explicit close across host replacement and exposes disabl
 
 test('startup defers active tasks without writes and rechecks activity inside the lock', async t => {
   const f = fixture(t);
+  writePatchPreferences(f.root, f.home, { enabled: true, autoMaintenance: true });
   applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.home, 'replacement-backup'));
   const sources = f.files.map(file => fs.readFileSync(file, 'utf8'));
   assert.equal(autoPatch(f.root, f.home, { artifacts: f.artifacts, activity: () => 'active-tasks' }).state, 'deferred');

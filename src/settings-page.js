@@ -11,7 +11,7 @@ export function ModelGroupsSettingsPage() {
   const phaseLabels = { idle: '检查完成，可选择操作', applied: '多密钥已应用（磁盘状态）', restored: '多密钥已关闭，插件仍保留（磁盘状态）', removing: '正在卸载，尚未确认完成', removed: '已确认关闭多密钥并卸载插件', failed: '维护失败，未确认完成' };
   const updatesAvailable = snapshot?.patches.some(patch => patch.updateAvailable) ?? false;
   const statusLabel = snapshot?.versionMismatch ? '网页与维护后端版本不一致，请先重启并刷新' : snapshot?.phase === 'idle'
-    ? snapshot.patches.some(patch => patch.state === 'conflict') ? '磁盘文件校验冲突，已停止整批维护'
+    ? snapshot.preferences?.enabled === false ? '仅使用分组与折叠，多密钥尚未启用' : snapshot.patches.some(patch => patch.state === 'conflict') ? '磁盘文件校验冲突，已停止整批维护'
       : snapshot.patches.some(patch => patch.applySupported === false) ? '旧补丁已识别，但此构建不支持新版协议补丁'
       : updatesAvailable ? '旧多密钥补丁已应用，可更新补丁'
       : snapshot.patches.length && snapshot.patches.every(patch => patch.state === 'patched') ? '多密钥已启用（磁盘状态）'
@@ -28,7 +28,7 @@ export function ModelGroupsSettingsPage() {
   };
   return h('section', { className: 'mg-maintenance', 'aria-label': '模型分组设置', 'aria-busy': state.busy },
     h('h2', null, '多密钥管理'),
-    h('p', null, '插件启动时会自动补回兼容的多密钥补丁；主动关闭后会保持关闭。可在这里直接启用或更新，关闭与卸载仍需确认。'),
+    h('p', null, '只用模型列表分组与折叠，无需启用多密钥。首次手动启用后默认打开自动维护；你可以随时关闭自动维护，保留当前功能。'),
     h('p', { className: 'mg-maintenance-help' }, `网页插件 ${MODEL_GROUPS_CLIENT_VERSION} · 后端插件 ${snapshot?.pluginVersion ?? '检查中'} · DSH ${snapshot?.compatibility?.hostVersion ?? '版本未确认'}`),
     h('section', { className: 'mg-maintenance-card', 'aria-label': '当前状态' },
       h('div', { className: 'mg-maintenance-row' }, h('h3', null, '当前状态'), h('button', { type: 'button', disabled: state.busy, onClick: refresh }, state.busy ? '处理中…' : '刷新检查')),
@@ -36,7 +36,7 @@ export function ModelGroupsSettingsPage() {
       state.error && h('p', { role: 'alert', className: 'mg-maintenance-error' }, state.error),
       state.patchedWarning && h('p', { role: 'alert', className: 'mg-maintenance-error' }, '从普通插件列表卸载只移除插件，不会还原 DSH 文件。需要卸载时，请使用此页的「关闭并卸载插件」。'),
       snapshot?.restartRequired && h('p', { role: 'status' }, 'DSH 程序文件已更新，需要重启 DSH 引擎，再刷新网页。只刷新网页不会生效。'),
-      compatibilityGuidance(snapshot?.compatibility) && h('p', { role: 'status', className: 'mg-maintenance-help' }, compatibilityGuidance(snapshot.compatibility)),
+      snapshot?.preferences?.enabled !== false && compatibilityGuidance(snapshot?.compatibility) && h('p', { role: 'status', className: 'mg-maintenance-help' }, compatibilityGuidance(snapshot.compatibility)),
       updatesAvailable && h('p', { role: 'status' }, '多密钥补丁有更新可用；点击更新将检查兼容片段、备份并更新补丁。'),
       snapshot?.phase === 'removed' && !snapshot.versionMismatch && h('p', { role: 'status' }, '卸载已确认：仅清理本插件的两个浏览器显示偏好，密钥、历史和备份均保留。'),
       snapshot?.warnings.length > 0 && h('p', { className: 'mg-maintenance-warning', role: 'status' }, '部分使用情况未验证，关闭前请阅读提示；检查提醒不会额外禁用操作。'),
@@ -44,6 +44,14 @@ export function ModelGroupsSettingsPage() {
       state.cleanupWarning && h('p', { role: 'status' }, '卸载已确认，但浏览器阻止清理本插件的显示偏好；其他数据未受影响。')),
     h('section', { className: 'mg-maintenance-card', 'aria-label': '多密钥操作' },
       h('h3', null, '多密钥操作'),
+      snapshot?.preferences && h('label', { className: 'mg-maintenance-row' },
+        h('span', null, '自动维护多密钥补丁'),
+        h('input', { type: 'checkbox', role: 'switch', 'aria-label': '自动维护多密钥补丁',
+          checked: snapshot.preferences.autoMaintenance, disabled: state.busy || !!pending || !snapshot.preferences.enabled || !!snapshot.versionMismatch,
+          onChange: event => controller.setAutoMaintenance(event.target.checked) })),
+      h('p', { className: 'mg-maintenance-help' }, snapshot?.preferences?.enabled
+        ? '开启后，下次插件启动会自动恢复兼容补丁；需要立即恢复可点击启用或更新。关闭此开关保留当前功能，以后需要手动恢复。不调用模型 API，不消耗模型额度。'
+        : '首次启用多密钥后，默认打开自动维护。只用折叠功能不需要开启。'),
       h('div', { className: 'mg-maintenance-actions' }, ...actions.map(([action, label]) => h('button', { key: action, type: 'button', className: action === 'restore-and-uninstall' ? 'mg-maintenance-secondary mg-maintenance-danger' : 'mg-maintenance-primary', disabled: state.busy || !!pending || !maintenanceCanAction(snapshot, action), onClick: () => action === 'apply' ? controller.operate(action, true) : setPending(action) }, label))),
       !anyAllowed && h('p', null, '请刷新检查或处理上方操作限制。检查提醒本身不会禁用按钮。'),
       pending && h('div', { role: 'dialog', 'aria-labelledby': confirmationId, 'aria-describedby': `${confirmationId}-help`, className: 'mg-maintenance-dialog' },

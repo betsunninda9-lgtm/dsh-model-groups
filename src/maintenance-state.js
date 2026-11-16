@@ -25,6 +25,8 @@ export function maintenanceSnapshot(value) {
   return { phase: value.phase, maintenanceProtocol: value.maintenanceProtocol === MAINTENANCE_CLIENT_PROTOCOL ? MAINTENANCE_CLIENT_PROTOCOL : null,
     pluginVersion: publicVersion(value.pluginVersion), compatibility: compatibilitySnapshot(value.compatibility), restartRequired: value.restartRequired, canApply: value.canApply,
     canRestoreOnly: value.canRestoreOnly, canRestore: value.canRestore,
+    preferences: value.preferences && typeof value.preferences.enabled === 'boolean' && typeof value.preferences.autoMaintenance === 'boolean'
+      ? { enabled: value.preferences.enabled, autoMaintenance: value.preferences.autoMaintenance } : null,
     token: value.token ?? null, patches: value.patches.map(patch => ({ state: patch.state, updateAvailable: patch.updateAvailable === true, applySupported: patch.applySupported !== false })),
     blockers: value.blockers.map(blocker => ({ code: blocker.code, count: blocker.count ?? null })),
     warnings: (value.warnings ?? []).map(warning => ({ code: warning.code, count: warning.count ?? null })) };
@@ -171,6 +173,18 @@ export function createMaintenanceController({ request = (...args) => fetch(...ar
         error: action ? '未能确认维护结果：连接中断、请求被拒绝或响应无效不代表成功。请刷新检查。' : '状态检查失败，请确认连接后刷新重试。' });
     } finally { if (current()) update({ busy: false }); }
   }
+  async function setAutoMaintenance(enabled) {
+    if (disposed || state.busy || typeof enabled !== 'boolean' || !state.snapshot?.preferences?.enabled || state.snapshot.versionMismatch) return;
+    const sequence = ++generation;
+    const current = () => !disposed && sequence === generation;
+    update({ busy: true, error: '' });
+    try {
+      const snapshot = await readSnapshot({ method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-auto-maintenance', autoMaintenance: enabled, maintenanceProtocol: MAINTENANCE_CLIENT_PROTOCOL, clientVersion }) });
+      if (current()) accept(snapshot);
+    } catch { if (current()) update({ error: '自动维护设置未能确认保存，请刷新后重试。' }); }
+    finally { if (current()) update({ busy: false }); }
+  }
   const operate = (action, checked) => checked === true && Object.hasOwn(ACTION_CAPABILITIES, action) ? run(action) : Promise.resolve();
   return {
     getSnapshot: () => state,
@@ -178,6 +192,7 @@ export function createMaintenanceController({ request = (...args) => fetch(...ar
     activate: () => { disposed = false; generation++; update({ busy: false }); },
     refresh: () => run(),
     operate,
+    setAutoMaintenance,
     apply: checked => operate('apply', checked),
     restoreOnly: checked => operate('restore-only', checked),
     restore: checked => operate('restore-and-uninstall', checked),

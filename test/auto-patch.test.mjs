@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { autoPatch, findDshRoot, startupActivity } from '../src/auto-patch.js';
 import { planPatches } from '../scripts/native-patches.mjs';
+import { writePatchPreferences } from '../src/patch-preferences.js';
 
 test('automatic patch validates all inputs, backs up outside package and repeats without writes', t => {
   if (!process.env.DSH_ROOT) return t.skip('Set DSH_ROOT for isolated real-file tests');
@@ -26,6 +27,7 @@ test('automatic patch validates all inputs, backs up outside package and repeats
     fs.writeFileSync(path.join(root, 'node_modules', plan.artifact.packageName, 'package.json'), JSON.stringify({ name: plan.artifact.packageName, version: '0.2.2-rc.1' }));
   }
   assert.equal(findDshRoot(path.join(root, 'package.json')), root);
+  writePatchPreferences(root, home, { enabled: true, autoMaintenance: true });
   const bad = path.join(root, plans[0].artifact.target);
   const replacement = plans[0].artifact.replacements[0];
   assert.ok(plans[0].result.includes(replacement.before), 'conflict fixture starts from a real required fragment');
@@ -35,7 +37,7 @@ test('automatic patch validates all inputs, backs up outside package and repeats
     const before = plans.map(plan => fs.readFileSync(path.join(root, plan.artifact.target), 'utf8'));
     assert.throws(() => autoPatch(root, home), /unrecognized content/);
     assert.deepEqual(plans.map(plan => fs.readFileSync(path.join(root, plan.artifact.target), 'utf8')), before, 'incompatible fragment blocks the entire batch without writes');
-    assert.equal(fs.existsSync(home), false, 'failed planning creates no lock or backup directory');
+    assert.equal(fs.existsSync(path.join(home, 'dsh-model-groups', fs.readdirSync(path.join(home, 'dsh-model-groups'))[0], 'backups')), false, 'failed planning creates no backups');
   }
   const unrelated = '\n// synthetic unrelated host change\n';
   fs.writeFileSync(bad, plans[0].result + unrelated);
@@ -77,10 +79,10 @@ test('host discovery survives unsupported version and missing or unknown program
   fs.writeFileSync(entry, JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.3' }));
   fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-llm-pi-ai', version: '0.2.3' }));
   assert.equal(findDshRoot(entry), root);
-  assert.throws(() => autoPatch(root, path.join(root, 'untouched-home')), /only @deepseek-ai/);
-  assert.equal(fs.existsSync(path.join(root, 'untouched-home')), false);
+  assert.equal(autoPatch(root, path.join(root, 'untouched-home')).state, 'fold-only');
+  assert.equal(fs.existsSync(path.join(root, 'untouched-home', 'dsh-model-groups')), true);
   fs.writeFileSync(entry, JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }));
   assert.equal(findDshRoot(entry), root);
-  assert.throws(() => autoPatch(root, path.join(root, 'untouched-home')), /ENOENT/);
-  assert.equal(fs.existsSync(path.join(root, 'untouched-home')), false);
+  assert.equal(autoPatch(root, path.join(root, 'untouched-home')).state, 'fold-only');
+  assert.equal(fs.existsSync(path.join(root, 'untouched-home', 'dsh-model-groups')), true);
 });

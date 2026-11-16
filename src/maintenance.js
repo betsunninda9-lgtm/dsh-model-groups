@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { patchStorage, readPatchPreferences, writePatchPreferences } from './patch-preferences.js';
 import { planPatches, inspectPatches, applyPlan, sha256 } from '../scripts/native-patches.mjs';
 
 export const BUNDLE_NAME = 'dsh-model-groups';
@@ -35,6 +36,8 @@ export function changePatchFiles(root, plans, backupDirectory) {
 }
 
 export function patchStatus(root, home, artifacts) {
+  const preferences = readPatchPreferences(root, home, artifacts);
+  if (!preferences.enabled) return { restartRequired: patchRestartRequired(root), failed: false, state: 'disabled' };
   const compatibility = inspectPatches(root, artifacts);
   const disabled = restorationPending(root, home);
   const ready = compatibility.files.length === 5 && compatibility.files.every(file => file.code === 'ready');
@@ -43,7 +46,7 @@ export function patchStatus(root, home, artifacts) {
 }
 
 export function maintenanceStorage(root, home) {
-  return path.join(home, BUNDLE_NAME, sha256(fs.realpathSync(root)).slice(0, 16));
+  return patchStorage(root, home);
 }
 export function restorationPending(root, home) {
   return fs.existsSync(path.join(maintenanceStorage(root, home), 'restore-pending.json'));
@@ -56,7 +59,7 @@ export function createUnavailableMaintenance() {
   return {
     snapshot: async () => ({ phase: 'failed', maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion,
       compatibility: { schema: 1, pluginVersion, hostVersion: null, supportedDsh: pluginPackage.engines.dsh, files: [] },
-      restartRequired: false, patches: [], blockers: [blocker], warnings: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null }),
+      restartRequired: false, preferences: { enabled: false, autoMaintenance: false }, patches: [], blockers: [blocker], warnings: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null }),
     restore: async () => { throw { ...blocker }; },
   };
 }
@@ -113,7 +116,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     const dependencies = restoreBlockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
     const installBlockers = report.blockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
     const available = (!busy || executing) && phase !== 'removed';
-    return { phase, maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion, compatibility: report.compatibility, restartRequired: restartRequired(), patches: report.plans.length ? report.plans.map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })) : report.compatibility.files.map(p => ({ name: p.id, state: p.state, updateAvailable: p.code === 'update_available', applySupported: ['ready', 'update_available', 'not_applied'].includes(p.code) })), blockers: report.blockers, warnings: report.warnings,
+    return { phase, maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion, preferences: readPatchPreferences(root, home, artifacts), compatibility: report.compatibility, restartRequired: restartRequired(), patches: report.plans.length ? report.plans.map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })) : report.compatibility.files.map(p => ({ name: p.id, state: p.state, updateAvailable: p.code === 'update_available', applySupported: ['ready', 'update_available', 'not_applied'].includes(p.code) })), blockers: report.blockers, warnings: report.warnings,
       token: null, canApply: available && valid && installBlockers.length === 0 && report.plans.some(p => p.state === 'pristine' || p.updateAvailable),
       canRestoreOnly: available && valid && dependencies.length === 0 && report.plans.some(p => p.state === 'patched'),
       canRestore: available && valid && restoreBlockers.length === 0,
@@ -131,6 +134,14 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
   async function restore(input) {
     if (busy) throw generic('BUSY', '已有维护任务正在执行。');
     if (input?.maintenanceProtocol !== MAINTENANCE_PROTOCOL || input?.clientVersion !== pluginVersion) throw generic('CLIENT_VERSION_MISMATCH', '网页与维护后端版本不一致，请重启原引擎并刷新网页后重新确认。');
+    if (input.action === 'set-auto-maintenance') {
+      if (typeof input.autoMaintenance !== 'boolean') throw generic('INVALID_PREFERENCES', '自动维护开关必须为布尔值。');
+      const preferences = readPatchPreferences(root, home, artifacts);
+      if (!preferences.enabled && input.autoMaintenance) throw generic('PREFERENCES_DISABLED', '请先启用多密钥。');
+      writePatchPreferences(root, home, { ...preferences, autoMaintenance: input.autoMaintenance });
+      ticket = undefined;
+      return snapshot();
+    }
     if (!['apply', 'restore-only', 'restore-and-uninstall'].includes(input?.action) || input?.confirmation !== 'CONFIRM PATCH OPERATION' ||
       !ticket || typeof input.token !== 'string' || input.token !== ticket.token || ticket.expires < now()) {
       throw generic('CONFIRMATION_REQUIRED', '确认已失效，请重新检查并明确确认。');
@@ -149,6 +160,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
        const permitted = action === 'apply' ? permissions.canApply : action === 'restore-only' ? permissions.canRestoreOnly : permissions.canRestore;
        if (!permitted || report.stamp !== expected.stamp) throw generic('STATE_CHANGED', '文件或任务状态发生变化，请确认没有任务运行后重试。');
       if (action === 'apply') {
+        const previousPreferences = readPatchPreferences(root, home, artifacts);
         changeFiles(planPatches(root, 'apply', artifacts));
         if (!patchPlans().every(p => p.state === 'patched' && !p.updateAvailable && p.applySupported !== false)) throw generic('VERIFY_FAILED', '补丁验证失败。');
         // Never delete a computed or unverified path; only this exact owned marker.
@@ -157,6 +169,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
           if (!stat.isFile() || stat.isSymbolicLink()) throw generic('VERIFY_FAILED', '恢复标记异常。');
           fs.unlinkSync(marker);
         }
+        writePatchPreferences(root, home, { enabled: true, autoMaintenance: previousPreferences.enabled ? previousPreferences.autoMaintenance : true });
         phase = 'applied';
         return view(await assessment());
       }
@@ -164,6 +177,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       // Fresh synchronous planning checks concurrent target edits again; applyPlan performs an additional check.
       changeFiles(patchPlans());
       if (!patchPlans().every(p => p.state === 'pristine')) throw generic('VERIFY_FAILED', '原版文件复查失败，未宣告卸载成功。');
+      writePatchPreferences(root, home, { enabled: false, autoMaintenance: false });
       phase = 'restored';
       if (action === 'restore-only') return view(await assessment());
       phase = 'removing';
@@ -173,7 +187,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       if (remaining?.installed || remaining?.removable || remaining?.enabled) throw generic('REMOVE_UNVERIFIED', '尚未确认插件依赖已移除，请检查插件列表；补丁不会自动重新安装。');
       if (!patchPlans().every(p => p.state === 'pristine')) throw generic('VERIFY_FAILED', '卸载后宿主文件再次变化，不能确认完整恢复。');
       phase = 'removed';
-      return { phase, maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion, compatibility: (await assessment()).compatibility, restartRequired: restartRequired(), patches: patchPlans().map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })), blockers: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null,
+      return { phase, maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion, preferences: readPatchPreferences(root, home, artifacts), compatibility: (await assessment()).compatibility, restartRequired: restartRequired(), patches: patchPlans().map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })), blockers: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null,
         notice: '已确认原版文件和插件依赖移除状态。密钥、历史和安全备份未删除；运行时状态未验证，是否需要重启以本进程实际文件修改记录为准。' };
     } catch (error) {
       phase = 'failed';

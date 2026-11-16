@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-groups",
-  "version": "0.3.11-beta.4",
+  "version": "0.3.11",
   "description": "在 DSH 网页端按供应商和密钥配置选择模型，并为同一供应商的不同密钥分别设置模型和 API 协议。支持 DSH 0.2.2-rc.1。",
   "type": "module",
   "license": "MIT",
@@ -76,5 +76,8 @@
     "native:check": "node scripts/native-patches.mjs --check",
     "doctor": "node scripts/doctor.mjs",
     "prepack": "npm run build && npm run check:build"
+  },
+  "dependencies": {
+    "acorn": "^8.15.0"
   }
 }

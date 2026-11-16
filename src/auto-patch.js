@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { planPatches, sha256 } from '../scripts/native-patches.mjs';
 import { changePatchFiles, restorationPending } from './maintenance.js';
+import { readPatchPreferences, writePatchPreferences } from './patch-preferences.js';
 
 export function findDshRoot(entry = process.argv[1]) {
   if (!entry) throw new Error('无法确定 DSH 进程入口。');
@@ -52,7 +53,14 @@ export function startupActivity(ctx, root, processDirectory = '/proc') {
 
 export function autoPatch(root, home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), { artifacts, activity = () => null } = {}) {
   if (restorationPending(root, home)) return { state: 'restore-pending', changed: 0, runtimeVerified: false };
+  const preferences = readPatchPreferences(root, home, artifacts);
+  if (!preferences.enabled) {
+    writePatchPreferences(root, home, preferences);
+    return { state: 'fold-only', changed: 0, runtimeVerified: false };
+  }
+  if (!preferences.autoMaintenance) return { state: 'manual-maintenance', changed: 0, runtimeVerified: false };
   const plans = planPatches(root, 'apply', artifacts);
+  writePatchPreferences(root, home, preferences);
   const pending = plans.some(plan => plan.source !== plan.result);
   if (!pending) return { state: 'disk-ready', changed: 0, runtimeVerified: false };
   const blocked = activity();
@@ -64,6 +72,8 @@ export function autoPatch(root, home = process.env.DSH_HOME || path.join(os.home
   catch { throw new Error('补丁安装已被锁定；可能有另一进程正在安装。确认没有安装任务后再处理锁目录，勿并发重试。'); }
   try {
     if (restorationPending(root, home)) return { state: 'restore-pending', changed: 0, runtimeVerified: false };
+    const preferences = readPatchPreferences(root, home, artifacts);
+    if (!preferences.enabled || !preferences.autoMaintenance) return { state: 'manual-maintenance', changed: 0, runtimeVerified: false };
     const blocked = activity();
     if (blocked) return { state: 'deferred', reason: blocked, changed: 0, runtimeVerified: false };
     const changed = changePatchFiles(root, planPatches(root, 'apply', artifacts), path.join(storage, 'backups'));

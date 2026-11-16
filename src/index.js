@@ -3,6 +3,7 @@ import path from 'node:path';
 import { autoPatch, findDshRoot, startupActivity } from './auto-patch.js';
 import { createMaintenance, createUnavailableMaintenance, maintenanceHandler, patchStatus } from './maintenance.js';
 import { createHostInspection } from './maintenance-host.js';
+import { readPatchPreferences } from './patch-preferences.js';
 
 // Neither disposal nor ordinary package removal restores patches: HMR and updates
 // also dispose plugins. Only the explicitly confirmed maintenance transaction does.
@@ -43,6 +44,8 @@ export function apply(ctx) {
     root = findDshRoot();
     recovery = recoverOnStartup(ctx, root, home);
     if (recovery.state === 'deferred') retryDeferredRecovery(ctx, () => {
+      const preferences = readPatchPreferences(root, home);
+      if (!preferences.enabled || !preferences.autoMaintenance) return { state: 'manual-maintenance', changed: 0, runtimeVerified: false };
       if (startupActivity(ctx, root)) return null;
       return recoverOnStartup(ctx, root, home);
     }, result => { recovery = result; });

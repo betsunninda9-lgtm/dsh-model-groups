@@ -1,3 +1,5 @@
+import { tokenContextEdit } from './token-context.mjs';
+
 // Apply the changed regions of a recipe, retaining host edits outside those regions.
 // Hashes remain useful for historical recipes/backups, but are not a build allowlist.
 const cache = new Map();
@@ -41,6 +43,7 @@ function insertedFragmentPresent(source, before, after) {
     const at = edit.start + delta;
     delta += edit.text.length - (edit.end - edit.start);
     if (edit.start !== edit.end || !edit.text.trim()) continue;
+    if (tokenContextEdit(source, after, { start: at, end: at + edit.text.length, text: '' }) !== undefined) return true;
     // An insertion can still match its old, zero-length span after it was
     // applied. Detect its individual postimage, including when another edit in
     // this same replacement is absent. Whole-replacement checks miss that case.
@@ -89,7 +92,11 @@ function fragment(source, before, after) {
       }
       if (found) break;
     }
-    if (!found) throw new Error('Patch fragment missing or ambiguous');
+    if (!found) {
+      const tokenResult = tokenContextEdit(result, before, edit);
+      if (tokenResult === undefined) throw new Error('Patch fragment missing or ambiguous');
+      result = tokenResult;
+    }
   }
   return result;
 }
