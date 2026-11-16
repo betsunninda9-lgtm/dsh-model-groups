@@ -123,7 +123,7 @@ export function sessionDependencies(events) {
 
 /** Read-only inspection bounded to the supplied home and installation. No global-install claim. */
 export function createHostInspection(ctx, root, home) {
-  return async function inspect() {
+  return async function inspect({ detailed = true } = {}) {
     const counts = new Map(), observations = new Set(), dependencies = new Set();
     const block = (code, count = 1) => counts.set(code, (counts.get(code) || 0) + count);
     const observe = value => {
@@ -144,6 +144,7 @@ export function createHostInspection(ctx, root, home) {
       if (signals.keys) block('key_config_dependency');
       if (signals.expression) block('expression_unknown');
     };
+    if (detailed) {
     try {
       const require = createRequire(path.join(root, 'package.json'));
       const boot = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-app-boot')).href);
@@ -211,6 +212,7 @@ export function createHostInspection(ctx, root, home) {
         }
       }
     } catch { block('session_inspection_failed'); block('activity_unverified'); }
+    }
     try {
       for (const agent of ctx.agents.list()) {
         // Inspect activity independently: a broken model service must not hide a live agent.
