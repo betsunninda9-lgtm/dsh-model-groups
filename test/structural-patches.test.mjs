@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { planPatches, applyPlan, ARTIFACTS, sha256 } from '../scripts/native-patches.mjs';
+import { planPatches, applyPlan, inspectPatches, ARTIFACTS, sha256 } from '../scripts/native-patches.mjs';
 import { structuralRevision, transformFragments } from '../scripts/structural-patches.mjs';
 
 test('fragment edits preserve host additions inside a larger changed function', () => {
@@ -133,6 +133,20 @@ test('one missing changed region blocks all five targets before backups or write
   const before = f.targets.map(file => fs.readFileSync(file, 'utf8'));
   assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /unrecognized content/);
   assert.deepEqual(f.targets.map(file => fs.readFileSync(file, 'utf8')), before);
+  assert.equal(fs.existsSync(path.join(f.root, 'backups')), false);
+  const failed = inspectPatches(f.root, f.artifacts).files[4];
+  assert.equal(failed.code, 'unrecognized_content');
+  assert.ok(failed.matching.some(item => item.phase === 'target_forward' && item.replacementIndex === 0));
+  assert.equal(JSON.stringify(failed).includes('unrelated'), false);
+});
+
+test('structural syntax failures publish fixed diagnostics without source or parser messages', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.targets[0], 'const duplicate = 1; const duplicate = 2;\n' + f.host);
+  const result = inspectPatches(f.root, f.artifacts).files[0];
+  assert.equal(result.code, 'unrecognized_content');
+  assert.deepEqual(result.matching, [{ recipeIndex: null, replacementIndex: null, phase: 'syntax', code: 'SYNTAX_CHECK_FAILED', candidateCount: null }]);
+  assert.equal(JSON.stringify(result).includes('duplicate'), false);
   assert.equal(fs.existsSync(path.join(f.root, 'backups')), false);
 });
 

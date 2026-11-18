@@ -3,7 +3,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { compatibilitySnapshot } from '../src/compatibility.js';
-import { structuralRevision } from './structural-patches.mjs';
+import { structuralRevision, diagnoseStructuralRevision } from './structural-patches.mjs';
+import { discoveryRecipes } from './discovery-recipes.mjs';
+import { settingsRecipes, SettingsRecipeAmbiguity } from './settings-recipes.mjs';
 import { spawnSync } from 'node:child_process';
 
 export const ARTIFACTS = ['pi-ai.patch.json', 'settings-models.patch.json', 'llm-typert.host.patch.json', 'llm-typert.remote-client.patch.json', 'api-remotes.patch.json'];
@@ -35,17 +37,44 @@ function declarationRecipes(source, candidates) {
   if (!replacements.length) return candidates;
   return candidates.map(candidate => ({ ...candidate, replacements: candidate.replacements.flatMap(replacement =>
     replacement.before === '    apiKey?: string;\\n}' && replacement.after === '    apiKey?: string;\\n    keyEntryId?: string;\\n}'
-      ? [...new Map(replacements.map(item => [item.before, item])).values()] : [replacement]) }));
+      ? [...new Map(replacements.map(item => [item.before, { ...replacement, ...item }])).values()] : [replacement]) }));
 }
 const structuralCache = new Map();
+const structuralFailures = new WeakMap();
+function preparedRecipes(source, candidates) {
+  const indexed = candidates.map(candidate => ({ ...candidate, replacements: candidate.replacements.map((replacement, recipeReplacementIndex) => ({ ...replacement, recipeReplacementIndex })) }));
+  return settingsRecipes(source, discoveryRecipes(source, declarationRecipes(source, indexed)));
+}
+function matchingFailure(error, source, prepared, knownOriginal) {
+  const report = diagnoseStructuralRevision(source, prepared, { knownOriginal });
+  const mapped = report.diagnostics.map(item => ({ ...item, replacementIndex: item.replacementIndex === null ? null
+    : prepared[item.recipeIndex]?.replacements[item.replacementIndex]?.recipeReplacementIndex ?? null }));
+  const priority = phase => ['target_forward', 'target_roundtrip', 'resolve'].includes(phase) ? 0 : 1;
+  structuralFailures.set(error, [...new Map(mapped.map(item => [JSON.stringify(item), item])).values()]
+    .sort((a, b) => priority(a.phase) - priority(b.phase)).slice(0, 16));
+  return error;
+}
 function compatibleRevision(source, candidates, knownOriginal = false) {
   const key = sha256(JSON.stringify([source, candidates, knownOriginal]));
   if (structuralCache.has(key)) return structuralCache.get(key);
-  const revision = structuralRevision(source, declarationRecipes(source, candidates), { knownOriginal });
-  if (revision) {
-    for (const content of new Set([revision.original, revision.latest])) {
-      const check = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: content, encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024 });
-      if (check.status !== 0) throw new Error('Structural patch syntax check failed');
+  let prepared;
+  try { prepared = preparedRecipes(source, candidates); }
+  catch (cause) {
+    if (!(cause instanceof SettingsRecipeAmbiguity)) throw cause;
+    const error = new Error('Ambiguous structural patch revision');
+    structuralFailures.set(error, [{ recipeIndex: null, replacementIndex: null, phase: 'resolve', code: 'REVISION_AMBIGUOUS', candidateCount: null }]);
+    throw error;
+  }
+  let revision;
+  try { revision = structuralRevision(source, prepared, { knownOriginal }); }
+  catch (error) { throw matchingFailure(error, source, prepared, knownOriginal); }
+  if (!revision) throw matchingFailure(new Error(`Refusing unrecognized content: ${candidates[0].target}`), source, prepared, knownOriginal);
+  for (const content of new Set([revision.original, revision.latest])) {
+    const check = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: content, encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024 });
+    if (check.status !== 0) {
+      const error = new Error('Structural patch syntax check failed');
+      structuralFailures.set(error, [{ recipeIndex: null, replacementIndex: null, phase: 'syntax', code: 'SYNTAX_CHECK_FAILED', candidateCount: null }]);
+      throw error;
     }
   }
   if (structuralCache.size >= 32) structuralCache.delete(structuralCache.keys().next().value);
@@ -241,6 +270,8 @@ function inspectPatchesFresh(dshRoot, artifactDirectory) {
       Object.assign(item, { state: plan.state, code: !plan.applySupported ? 'unsupported_patch_build' : plan.updateAvailable ? 'update_available' : plan.state === 'pristine' ? 'not_applied' : 'ready',
         baseSha256: plan.baseSha256, targetSha256: plan.targetSha256 });
     } catch (error) {
+      const matching = structuralFailures.get(error);
+      if (matching?.length) item.matching = matching;
       const message = error?.message ?? '';
       item.code = message === 'Unexpected DSH host package' ? 'host_identity'
         : message === 'Installed native package identity mismatch' ? 'package_identity'

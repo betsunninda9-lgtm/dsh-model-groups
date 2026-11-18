@@ -2,13 +2,19 @@ import { tokenContextEdit } from './token-context.mjs';
 
 // Apply the changed regions of a recipe, retaining host edits outside those regions.
 // Hashes remain useful for historical recipes/backups, but are not a build allowlist.
+const failureDetails = new WeakMap();
+function patchFailure(code, message) {
+  const error = new Error(message);
+  failureDetails.set(error, { code, replacementIndex: null });
+  return error;
+}
 const cache = new Map();
 function changes(before, after) {
   const key = JSON.stringify([before, after]);
   if (cache.has(key)) return cache.get(key);
   const a = before.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   const b = after.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-  if (a.length * b.length > 4_000_000) throw new Error('Patch fragment is too large');
+  if (a.length * b.length > 4_000_000) throw patchFailure('FRAGMENT_TOO_LARGE', 'Patch fragment is too large');
   const rows = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
   for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--)
     rows[i][j] = a[i] === b[j] ? rows[i + 1][j + 1] + 1 : Math.max(rows[i + 1][j], rows[i][j + 1]);
@@ -67,12 +73,12 @@ function fragment(source, before, after) {
       if (edit.start !== edit.end || !edit.text.trim()) continue;
       if (edit.start === 0 && source.includes(edit.text + before)
         || edit.end === before.length && source.includes(before + edit.text)) {
-        throw new Error('Patch insertion already present; partial or duplicate patch');
+        throw patchFailure('INSERTION_PRESENT', 'Patch insertion already present; partial or duplicate patch');
       }
     }
     return source.split(before).join(after);
   }
-  if (insertedFragmentPresent(source, before, after)) throw new Error('Patch insertion already present; partial or duplicate patch');
+  if (insertedFragmentPresent(source, before, after)) throw patchFailure('INSERTION_PRESENT', 'Patch insertion already present; partial or duplicate patch');
   let result = source;
   for (const edit of [...changes(before, after)].reverse()) {
     const old = before.slice(edit.start, edit.end);
@@ -94,7 +100,7 @@ function fragment(source, before, after) {
     }
     if (!found) {
       const tokenResult = tokenContextEdit(result, before, edit);
-      if (tokenResult === undefined) throw new Error('Patch fragment missing or ambiguous');
+      if (tokenResult === undefined) throw patchFailure('FRAGMENT_MISSING_OR_AMBIGUOUS', 'Patch fragment missing or ambiguous');
       result = tokenResult;
     }
   }
@@ -103,13 +109,31 @@ function fragment(source, before, after) {
 export function transformFragments(source, recipe, reverse = false) {
   let result = source;
   const replacements = reverse ? [...recipe.replacements].reverse() : recipe.replacements;
-  for (const { before, after } of replacements) {
-    if (typeof before !== 'string' || !before || typeof after !== 'string' || !after) throw new Error('Invalid structural patch recipe');
-    result = fragment(result, reverse ? after : before, reverse ? before : after);
+  for (const [offset, { before, after }] of replacements.entries()) {
+    const replacementIndex = reverse ? replacements.length - 1 - offset : offset;
+    try {
+      if (typeof before !== 'string' || !before || typeof after !== 'string' || !after) throw patchFailure('INVALID_RECIPE', 'Invalid structural patch recipe');
+      result = fragment(result, reverse ? after : before, reverse ? before : after);
+    } catch (error) {
+      if (error !== null && (typeof error === 'object' || typeof error === 'function')) {
+        failureDetails.set(error, { code: failureDetails.get(error)?.code ?? 'INTERNAL_ERROR', replacementIndex });
+      }
+      throw error;
+    }
   }
   return result;
 }
 export function structuralRevision(source, candidates, { knownOriginal = false } = {}) {
+  return evaluateStructuralRevision(source, candidates, knownOriginal);
+}
+function evaluateStructuralRevision(source, candidates, knownOriginal, report) {
+  const emit = (recipe, phase, code, replacementIndex = null, candidateCount = null) => report?.({
+    recipeIndex: recipe ? candidates.indexOf(recipe) : null, replacementIndex, phase, code, candidateCount,
+  });
+  const failed = (recipe, phase, error) => {
+    const detail = failureDetails.get(error);
+    emit(recipe, phase, detail?.code ?? 'INTERNAL_ERROR', detail?.replacementIndex ?? null);
+  };
   const current = candidates.filter(item => item.current === true);
   const latest = current.length ? current : [candidates[0]];
   const distinct = items => [...new Map(items.map(item => [JSON.stringify(item.replacements), item])).values()];
@@ -118,21 +142,30 @@ export function structuralRevision(source, candidates, { knownOriginal = false }
     for (const recipe of distinct(observed)) {
       // A partly present recipe is not a pristine build. A complete known reverse
       // must succeed first; otherwise adding another copy would hide corruption.
-      if (!patched && recipe.replacements.some(({ before, after }) => after.length > before.length && after.length >= 64 && source.includes(after))) continue;
+      const partialIndex = !patched ? recipe.replacements.findIndex(({ before, after }) => after.length > before.length && after.length >= 64 && source.includes(after)) : -1;
+      if (partialIndex >= 0) { emit(recipe, 'pristine_guard', 'PARTIAL_POSTIMAGE', partialIndex); continue; }
+      let phase = 'observe_reverse';
       try {
         const original = patched ? transformFragments(source, recipe, true) : source;
-        if (patched && transformFragments(original, recipe) !== source) continue;
+        phase = 'observe_roundtrip';
+        if (patched && transformFragments(original, recipe) !== source) { emit(recipe, phase, 'ROUNDTRIP_MISMATCH'); continue; }
         for (const target of distinct(latest)) {
+          let targetPhase = 'target_forward';
           try {
             const result = transformFragments(original, target);
-            if (result === original || transformFragments(result, target, true) !== original) continue;
+            if (result === original) { emit(target, targetPhase, 'NO_CHANGE'); continue; }
+            targetPhase = 'target_roundtrip';
+            if (transformFragments(result, target, true) !== original) { emit(target, targetPhase, 'ROUNDTRIP_MISMATCH'); continue; }
             matches.push({ original, latest: result, artifact: recipe, state: patched ? 'patched' : 'pristine' });
-          } catch { /* Try another supported recipe, never guess a failed span. */ }
+          } catch (error) { failed(target, targetPhase, error); }
         }
-      } catch { /* Not this revision. */ }
+      } catch (error) { failed(recipe, phase, error); }
     }
     const unique = [...new Map(matches.map(item => [JSON.stringify([item.original, item.latest]), item])).values()];
-    if (unique.length > 1) throw new Error('Ambiguous structural patch revision');
+    if (unique.length > 1) {
+      emit(null, 'resolve', 'REVISION_AMBIGUOUS', null, unique.length);
+      throw patchFailure('REVISION_AMBIGUOUS', 'Ambiguous structural patch revision');
+    }
     return unique[0];
   }
   // Exact historical recipes already establish ownership. Never reinterpret a
@@ -141,4 +174,20 @@ export function structuralRevision(source, candidates, { knownOriginal = false }
   // A complete reverse roundtrip recognizes existing patches even when an App
   // update changed unrelated code. Do not apply a second layer over them.
   return resolve(latest, true) || resolve(candidates.filter(item => !latest.includes(item)), true) || resolve(latest, false);
+}
+
+// This result deliberately excludes revisions, source bytes and caught error data.
+// Indices refer to the caller's fixed recipe/replacement order, even on reverse.
+export function diagnoseStructuralRevision(source, candidates, { knownOriginal = false } = {}) {
+  const diagnostics = [];
+  const record = detail => { if (diagnostics.length < 128) diagnostics.push(detail); };
+  try {
+    const revision = evaluateStructuralRevision(source, candidates, knownOriginal, record);
+    return { matched: !!revision, diagnostics };
+  } catch (error) {
+    if (failureDetails.get(error)?.code !== 'REVISION_AMBIGUOUS') {
+      record({ recipeIndex: null, replacementIndex: null, phase: 'resolve', code: 'INTERNAL_ERROR', candidateCount: null });
+    }
+    return { matched: false, diagnostics };
+  }
 }
