@@ -44,7 +44,7 @@ export function maintenanceBlockerText(blocker) {
     active_sessions: '运行中的会话会限制关闭和卸载；启用或更新磁盘补丁仍可执行。',
     active_turns: '运行中的回合会限制关闭和卸载；启用或更新磁盘补丁仍可执行。',
     patch_conflict: '补丁状态冲突，不会强制覆盖。请复制脱敏诊断；不要先卸载、还原或删除配置。',
-    client_version_mismatch: '网页与插件后端版本不一致，已禁止维护。请重启原引擎并刷新网页后重新检查。',
+    client_version_mismatch: '网页与后端的维护协议不兼容，请刷新网页后重试。',
     unsupported_patch_build: '此宿主构建尚无经过验证的新版协议补丁，已阻止不完整更新；仍可关闭或卸载，不会改动密钥。',
     backup_missing: '缺少可验证的原版备份，无法安全恢复。',
     restart_required: '需要重启原引擎后重新检查。',
@@ -130,7 +130,7 @@ export function createMaintenanceController({ request = (...args) => fetch(...ar
     const envelope = await response.json();
     if (envelope?.ok !== true) throw new Error('Maintenance refused');
     const snapshot = maintenanceSnapshot(envelope.value);
-    if (clientVersion !== null && (snapshot.maintenanceProtocol !== MAINTENANCE_CLIENT_PROTOCOL || snapshot.pluginVersion !== clientVersion)) {
+    if (clientVersion !== null && snapshot.maintenanceProtocol !== MAINTENANCE_CLIENT_PROTOCOL) {
       return { ...snapshot, versionMismatch: true, canApply: false, canRestoreOnly: false, canRestore: false, token: null,
         blockers: [...snapshot.blockers, { code: 'CLIENT_VERSION_MISMATCH', count: null }] };
     }
@@ -144,7 +144,7 @@ export function createMaintenanceController({ request = (...args) => fetch(...ar
       }
     }
     update({ snapshot, cleanupWarning, patchedWarning: snapshot.patches.some(patch => patch.state === 'patched'),
-      error: snapshot.versionMismatch ? '网页与插件后端版本不一致，已停止维护。请重启原引擎并刷新网页后复查。' : snapshot.phase === 'failed' ? '维护操作失败，未确认完成。请刷新检查，不要强制覆盖。' : '' });
+      error: snapshot.versionMismatch ? '网页与后端的维护协议不兼容，请刷新网页后重试。' : snapshot.phase === 'failed' ? '维护操作失败，未确认完成。请刷新检查，不要强制覆盖。' : '' });
   }
   async function run(action = null) {
     if (disposed || state.busy || (action && !maintenanceCanAction(state.snapshot, action))) return;

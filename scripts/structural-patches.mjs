@@ -109,7 +109,7 @@ export function transformFragments(source, recipe, reverse = false) {
   }
   return result;
 }
-export function structuralRevision(source, candidates) {
+export function structuralRevision(source, candidates, { knownOriginal = false } = {}) {
   const current = candidates.filter(item => item.current === true);
   const latest = current.length ? current : [candidates[0]];
   const distinct = items => [...new Map(items.map(item => [JSON.stringify(item.replacements), item])).values()];
@@ -135,6 +135,9 @@ export function structuralRevision(source, candidates) {
     if (unique.length > 1) throw new Error('Ambiguous structural patch revision');
     return unique[0];
   }
+  // Exact historical recipes already establish ownership. Never reinterpret a
+  // native current-looking span as plugin code when the pristine source is known.
+  if (knownOriginal) return resolve(latest, false);
   // A complete reverse roundtrip recognizes existing patches even when an App
   // update changed unrelated code. Do not apply a second layer over them.
   return resolve(latest, true) || resolve(candidates.filter(item => !latest.includes(item)), true) || resolve(latest, false);

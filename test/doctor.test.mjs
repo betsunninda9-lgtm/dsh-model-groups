@@ -37,7 +37,12 @@ test('diagnostic CLI emits sanitized JSON for conflicts, missing programs and ho
   assert.equal(JSON.parse(second.stdout).files.at(-1).code, 'target_unavailable');
   fs.writeFileSync(hostPackage, JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.3' }));
   const third = doctor('--dsh-root', root); assert.equal(third.status, 1);
-  assert.ok(JSON.parse(third.stdout).files.every(item => item.code === 'host_version'));
+  const thirdReport = JSON.parse(third.stdout);
+  assert.equal(thirdReport.compatibility.hostVersion, '0.2.3');
+  assert.equal(thirdReport.supportedDsh, null);
+  assert.equal(thirdReport.compatibilityPolicy, 'code');
+  assert.ok(thirdReport.files.slice(0, -1).every(item => item.code === 'unrecognized_content'));
+  assert.equal(thirdReport.files.at(-1).code, 'target_unavailable');
 });
 
 test('diagnostic CLI argument failure is valid closed JSON rather than a path-bearing exception', () => {

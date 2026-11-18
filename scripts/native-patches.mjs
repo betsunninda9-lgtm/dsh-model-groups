@@ -38,10 +38,10 @@ function declarationRecipes(source, candidates) {
       ? [...new Map(replacements.map(item => [item.before, item])).values()] : [replacement]) }));
 }
 const structuralCache = new Map();
-function compatibleRevision(source, candidates) {
-  const key = sha256(source + JSON.stringify(candidates));
+function compatibleRevision(source, candidates, knownOriginal = false) {
+  const key = sha256(JSON.stringify([source, candidates, knownOriginal]));
   if (structuralCache.has(key)) return structuralCache.get(key);
-  const revision = structuralRevision(source, declarationRecipes(source, candidates));
+  const revision = structuralRevision(source, declarationRecipes(source, candidates), { knownOriginal });
   if (revision) {
     for (const content of new Set([revision.original, revision.latest])) {
       const check = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: content, encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024 });
@@ -77,11 +77,12 @@ function planPatchFiles(dshRoot, mode, artifactDirectory, names) {
   const root = fs.realpathSync(dshRoot);
   const inner = path.join(root, 'node_modules/@deepseek-ai/dsh/package.json');
   const dsh = JSON.parse(fs.readFileSync(fs.existsSync(inner) ? inner : path.join(root, 'package.json'), 'utf8'));
-  if (dsh.name !== '@deepseek-ai/dsh' || dsh.version !== '0.2.2-rc.1') throw new Error('This patch supports only @deepseek-ai/dsh 0.2.2-rc.1');
+  if (dsh.name !== '@deepseek-ai/dsh') throw new Error('Unexpected DSH host package');
   const seen = new Set();
   return names.map(name => {
     let artifact = JSON.parse(fs.readFileSync(path.join(artifactDirectory, name), 'utf8'));
-    if (artifact.version !== '0.2.2-rc.1' || !/^@deepseek-ai\/dsh-[a-z-]+$/.test(artifact.packageName)) throw new Error('Unsupported patch package/version');
+    // Recipe versions identify their historical source, not supported host versions.
+    if (typeof artifact.version !== 'string' || !artifact.version.trim() || !/^@deepseek-ai\/dsh-[a-z-]+$/.test(artifact.packageName)) throw new Error('Unsupported patch package/version');
     if (!Array.isArray(artifact.replacements) || artifact.replacements.length === 0 || !/^[0-9a-f]{64}$/.test(artifact.baseSha256) || !/^[0-9a-f]{64}$/.test(artifact.resultSha256)) throw new Error('Invalid patch manifest');
     const prefix = `node_modules/${artifact.packageName}/`;
     if (typeof artifact.target !== 'string' || !artifact.target.startsWith(prefix) || artifact.target.includes('..') || artifact.target.includes('\\')) throw new Error('Unsafe patch target');
@@ -89,7 +90,7 @@ function planPatchFiles(dshRoot, mode, artifactDirectory, names) {
     if (!inside(root, file) || fs.realpathSync(file) !== file || !fs.statSync(file).isFile() || seen.has(file)) throw new Error('Unexpected target path or duplicate patch');
     seen.add(file);
     const pkg = JSON.parse(fs.readFileSync(path.join(root, 'node_modules', artifact.packageName, 'package.json'), 'utf8'));
-    if (pkg.name !== artifact.packageName || pkg.version !== artifact.version) throw new Error('Installed native package version mismatch');
+    if (pkg.name !== artifact.packageName) throw new Error('Installed native package identity mismatch');
     const source = fs.readFileSync(file, 'utf8');
     const hash = sha256(source);
     const primary = artifact;
@@ -111,21 +112,41 @@ function planPatchFiles(dshRoot, mode, artifactDirectory, names) {
     if (patchedMatches.length > 1) throw new Error('Ambiguous patch variant');
     artifact = patchedMatches[0] || candidates.find(candidate => hash === candidate.baseSha256) || primary;
     const state = hash === artifact.baseSha256 ? 'pristine' : hash === artifact.resultSha256 ? 'patched' : 'modified';
-    if (state === 'modified') {
-      const compatible = structuralTargets.has(primary.target) ? compatibleRevision(source, candidates) : null;
-      if (!compatible) throw new Error(`Refusing unrecognized content: ${artifact.target}`);
-      const { original, latest } = compatible;
-      return { name, artifact: { ...primary, baseSha256: sha256(original), resultSha256: sha256(latest) }, file, source,
-        result: mode === 'apply' ? latest : mode === 'revert' ? original : source,
-        state: compatible.state, updateAvailable: compatible.state === 'patched' && source !== latest,
-        applySupported: true, compatibility: 'fragments', observedSha256: hash, baseSha256: sha256(original),
-        targetSha256: sha256(latest), mode: fs.statSync(file).mode & 0o777 };
+    const exactSupported = primary.requiresCurrent !== true || currentByBase.has(artifact.baseSha256);
+    if (state === 'modified' || !exactSupported) {
+      let compatible;
+      try {
+        if (structuralTargets.has(primary.target)) {
+          if (state === 'modified') compatible = compatibleRevision(source, candidates);
+          else {
+            const original = state === 'patched' ? transformSource(source, artifact, true) : source;
+            const observedPatched = transformSource(original, artifact);
+            if (state === 'patched' && observedPatched !== source) throw new Error('Patch roundtrip mismatch');
+            const upgraded = compatibleRevision(original, candidates, true);
+            if (upgraded) compatible = { ...upgraded, state };
+          }
+        }
+      }
+      catch (error) {
+        // A historical exact recipe remains restorable even when no current
+        // structural recipe fits. Unknown builds have no such exact fallback.
+        if (state === 'modified') throw error;
+      }
+      if (compatible) {
+        const { original, latest } = compatible;
+        return { name, artifact: { ...primary, baseSha256: sha256(original), resultSha256: sha256(latest) }, file, source,
+          result: mode === 'apply' ? latest : mode === 'revert' ? original : source,
+          state: compatible.state, updateAvailable: compatible.state === 'patched' && source !== latest,
+          applySupported: true, compatibility: 'fragments', hostVersion: dsh.version, installedVersion: pkg.version,
+          observedSha256: hash, baseSha256: sha256(original), targetSha256: sha256(latest), mode: fs.statSync(file).mode & 0o777 };
+      }
+      if (state === 'modified') throw new Error(`Refusing unrecognized content: ${artifact.target}`);
     }
     const original = state === 'patched' ? transformSource(source, artifact, true) : source;
     // Verify the observed revision bidirectionally, including check/no-op plans.
     const observedPatched = transformSource(original, artifact);
     if (state === 'patched' && observedPatched !== source) throw new Error('Patch roundtrip mismatch');
-    const applySupported = primary.requiresCurrent !== true || currentByBase.has(artifact.baseSha256);
+    const applySupported = exactSupported;
     // A recognized old revision can still be checked/restored. It cannot be
     // silently left behind while dependent UI/schema files upgrade around it.
     if (mode === 'apply' && !applySupported) throw new Error('No verified current patch for this native build; no files written');
@@ -133,7 +154,8 @@ function planPatchFiles(dshRoot, mode, artifactDirectory, names) {
     const latest = transformSource(original, targetArtifact);
     const updateAvailable = state === 'patched' && sha256(latest) !== hash;
     const result = mode === 'apply' ? latest : mode === 'revert' ? original : source;
-    return { name, artifact, file, source, result, state, updateAvailable, applySupported, observedSha256: hash, baseSha256: artifact.baseSha256, targetSha256: targetArtifact.resultSha256, mode: fs.statSync(file).mode & 0o777 };
+    return { name, artifact, file, source, result, state, updateAvailable, applySupported, hostVersion: dsh.version, installedVersion: pkg.version,
+      observedSha256: hash, baseSha256: artifact.baseSha256, targetSha256: targetArtifact.resultSha256, mode: fs.statSync(file).mode & 0o777 };
   });
 }
 
@@ -220,14 +242,14 @@ function inspectPatchesFresh(dshRoot, artifactDirectory) {
         baseSha256: plan.baseSha256, targetSha256: plan.targetSha256 });
     } catch (error) {
       const message = error?.message ?? '';
-      item.code = message === 'This patch supports only @deepseek-ai/dsh 0.2.2-rc.1' ? 'host_version'
-        : message === 'Installed native package version mismatch' ? 'package_version'
-        : message.startsWith('Refusing unrecognized content: ') ? 'unrecognized_content'
+      item.code = message === 'Unexpected DSH host package' ? 'host_identity'
+        : message === 'Installed native package identity mismatch' ? 'package_identity'
+        : message.startsWith('Refusing unrecognized content: ') || message === 'Structural patch syntax check failed' || message === 'Ambiguous structural patch revision' ? 'unrecognized_content'
         : error?.code === 'ENOENT' || error?.code === 'EACCES' || message === 'Unexpected target path or duplicate patch' ? 'target_unavailable' : 'patch_manifest';
     }
     return item;
   });
-  return compatibilitySnapshot({ schema: 1, pluginVersion: pkg.version, hostVersion, supportedDsh: pkg.engines.dsh, files });
+  return compatibilitySnapshot({ schema: 1, pluginVersion: pkg.version, hostVersion, supportedDsh: null, compatibilityPolicy: 'code', files });
 }
 
 function stageReplacement(file, content, mode) {

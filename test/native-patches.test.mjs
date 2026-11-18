@@ -115,12 +115,30 @@ test('legacy revision metadata must match exact reversible source and unknown ed
   assert.equal(fs.readFileSync(item.file, 'utf8'), 'after-0-foreign');
 });
 
-test('modified or newer native packages fail closed before any write', t => {
+test('incompatible program content still blocks across different host versions before any write', t => {
   const f = fixture(t); fs.appendFileSync(f.files.at(-1).file, 'concurrent edit');
   assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /unrecognized content/);
   assert.equal(fs.readFileSync(f.files[0].file, 'utf8'), f.files[0].source);
   fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.3' }));
-  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /only @deepseek-ai\/dsh 0.2.2-rc.1/);
+  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /unrecognized content/);
+});
+
+test('host and child version differences do not block exact compatible program content', t => {
+  const f = fixture(t), backups = path.join(f.root, 'version-backups');
+  for (const version of ['0.2.1', '0.2.3', '0.3.0-android.7+custom.1', '1.0.0']) {
+    fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }));
+    for (const [i, item] of f.files.entries()) {
+      const childVersion = `0.${i + 4}.0-port.2`;
+      fs.writeFileSync(path.join(f.root, 'node_modules', item.artifact.packageName, 'package.json'), JSON.stringify({ name: item.artifact.packageName, version: childVersion }));
+    }
+    const plans = planPatches(f.root, 'apply', f.artifacts);
+    assert.ok(plans.every(plan => plan.hostVersion === version && plan.installedVersion !== plan.artifact.version));
+    assert.equal(applyPlan(plans, backups), 5);
+    assert.ok(inspectPatches(f.root, f.artifacts).files.every(item => item.code === 'ready'));
+    assert.equal(applyPlan(planPatches(f.root, 'apply', f.artifacts), backups), 0);
+    assert.equal(applyPlan(planPatches(f.root, 'revert', f.artifacts), backups), 5);
+    assert.ok(f.files.every(item => fs.readFileSync(item.file, 'utf8') === item.source));
+  }
 });
 
 test('unsafe targets and malformed literal artifacts are rejected', t => {
@@ -281,15 +299,25 @@ test('per-file compatibility explains a late unknown hash while the whole apply 
   assert.deepEqual(f.files.map(item => fs.readFileSync(item.file)), before);
 });
 
-test('compatibility distinguishes host version, package version, missing file and unsafe manifest without source leakage', t => {
+test('compatibility reports real versions and distinguishes package identity, missing file and unsafe manifest', t => {
   const f = fixture(t);
   const pkg = path.join(f.root, 'node_modules', f.files[0].artifact.packageName, 'package.json');
   fs.writeFileSync(pkg, JSON.stringify({ name: f.files[0].artifact.packageName, version: '0.2.3' }));
-  assert.equal(inspectPatches(f.root, f.artifacts).files[0].code, 'package_version');
+  assert.equal(inspectPatches(f.root, f.artifacts).files[0].code, 'not_applied');
   assert.equal(inspectPatches(f.root, f.artifacts).files[0].installedVersion, '0.2.3');
   fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.3' }));
-  assert.ok(inspectPatches(f.root, f.artifacts).files.every(item => item.code === 'host_version'));
-  fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }));
+  const crossVersion = inspectPatches(f.root, f.artifacts);
+  assert.equal(crossVersion.hostVersion, '0.2.3');
+  assert.equal(crossVersion.supportedDsh, null);
+  assert.equal(crossVersion.compatibilityPolicy, 'code');
+  assert.ok(crossVersion.files.every(item => item.code === 'not_applied'));
+  fs.writeFileSync(pkg, JSON.stringify({ name: 'unrelated-package', version: '0.2.3' }));
+  assert.equal(inspectPatches(f.root, f.artifacts).files[0].code, 'package_identity');
+  assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /package identity mismatch/);
+  fs.writeFileSync(pkg, JSON.stringify({ name: f.files[0].artifact.packageName, version: '0.2.3' }));
+  fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: 'unrelated-host', version: '0.2.3' }));
+  assert.ok(inspectPatches(f.root, f.artifacts).files.every(item => item.code === 'host_identity'));
+  fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.3' }));
   assert.equal(fs.realpathSync(f.files[1].file), f.files[1].file); fs.unlinkSync(f.files[1].file);
   assert.equal(inspectPatches(f.root, f.artifacts).files[1].code, 'target_unavailable');
   fs.writeFileSync(path.join(f.artifacts, f.files[2].name), JSON.stringify({ ...f.files[2].artifact, target: '../private-config.yaml' }));

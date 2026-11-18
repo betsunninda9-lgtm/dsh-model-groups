@@ -51,10 +51,8 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
     if (bases.has(delta.resultSha256)) assert.equal(pristine, bases.get(delta.resultSha256));
     bases.set(delta.resultSha256, pristine);
   }
-  // The released 0.3.6-beta.1 manifest had no current revision for the
-  // cancellation build, so it refused it. Reconstruct that shape structurally
-  // (never by duplicating the large replacement list) to keep proving the
-  // refusal path, and assert it really omits that current revision.
+  // Reconstruct a historical manifest without a current revision for this base.
+  // Today's engine must adapt its compatible code without adding a hash mapping.
   const beta1Pi = { ...piInput.artifact, variants: piInput.artifact.variants.filter(value => !(value.current === true && value.baseSha256 === delta.resultSha256)) };
   assert.equal(candidates(beta1Pi).some(value => value.current === true && value.baseSha256 === delta.resultSha256), false, 'legacy manifest must omit the cancellation build');
   const beta1PiText = JSON.stringify(beta1Pi, null, 2) + '\n';
@@ -112,10 +110,13 @@ test('all five real artifacts upgrade every supplied build in place, revert and 
         assert.equal(before.find(plan => plan.name === 'pi-ai.patch.json').updateAvailable, true);
       }
       if (baseHash === delta.resultSha256 && !isRecent(mode)) {
-        const unsupported = planPatches(copy, 'check', beta1Artifacts).find(plan => plan.name === 'pi-ai.patch.json');
-        assert.equal(unsupported.applySupported, false, 'old beta.1 really did reject this exact build');
-        assert.throws(() => planPatches(copy, 'apply', beta1Artifacts), /No verified current patch/);
-        for (const plan of before) assert.equal(fs.readFileSync(plan.file, 'utf8'), plan.source, 'blocked old plan must not write any file');
+        const compatible = planPatches(copy, 'check', beta1Artifacts).find(plan => plan.name === 'pi-ai.patch.json');
+        assert.equal(compatible.applySupported, true, 'compatible historical code no longer requires a current per-base hash mapping');
+        assert.equal(compatible.compatibility, 'fragments');
+        const adapted = planPatches(copy, 'apply', beta1Artifacts).find(plan => plan.name === 'pi-ai.patch.json');
+        assert.equal(adapted.result, planPatches(copy, 'apply').find(plan => plan.name === 'pi-ai.patch.json').result);
+        assert.equal(planPatches(copy, 'revert', beta1Artifacts).find(plan => plan.name === 'pi-ai.patch.json').result, pristinePi);
+        for (const plan of before) assert.equal(fs.readFileSync(plan.file, 'utf8'), plan.source, 'structural planning stays read-only');
       }
       const apply = planPatches(copy, 'apply');
       assert.equal(apply.some(plan => plan.result !== plan.source), needsUpdate);

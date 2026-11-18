@@ -53,6 +53,15 @@ test('automatic patch validates all inputs, backs up outside package and repeats
   const stats = planPatches(root, 'check').map(plan => fs.statSync(plan.file).mtimeMs);
   assert.equal(autoPatch(root, home).changed, 0);
   assert.deepEqual(planPatches(root, 'check').map(plan => fs.statSync(plan.file).mtimeMs), stats);
+  // A runtime update may change versions independently while restoring compatible programs.
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.3.0-mobile.1+runtime.2' }));
+  for (const plan of plans) {
+    fs.writeFileSync(path.join(root, plan.artifact.target), plan.result + unrelated);
+    fs.writeFileSync(path.join(root, 'node_modules', plan.artifact.packageName, 'package.json'), JSON.stringify({ name: plan.artifact.packageName, version: '0.4.1-port.2' }));
+  }
+  assert.deepEqual(autoPatch(root, home), { state: 'restart-required', changed: 5, runtimeVerified: false });
+  assert.ok(planPatches(root).every(plan => plan.state === 'patched' && plan.hostVersion === '0.3.0-mobile.1+runtime.2' && plan.installedVersion === '0.4.1-port.2'));
+  assert.equal(autoPatch(root, home).changed, 0);
 });
 
 

@@ -343,7 +343,7 @@ test('deferred recovery retries on a managed timer, stops on completion or failu
   dispose(); tick(); assert.equal(cleared, 1);
 });
 
-test('startup waits for timer and agent services, then recovers after busy work ends', async t => {
+test('startup waits for timers without requiring agents, then recovers when activity allows', async t => {
   const { apply, startRecovery, retryDeferredRecovery } = await import('../src/index.js');
   assert.throws(() => retryDeferredRecovery({}, () => null, () => {}), /定时器服务不可用/);
   if (process.env.DSH_ROOT) {
@@ -352,7 +352,7 @@ test('startup waits for timer and agent services, then recovers after busy work 
       process.argv[1] = path.join(process.env.DSH_ROOT, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
       apply({ inject(deps, callback) { injections.push({ deps, callback }); }, logger: { error(message) { assert.fail(message); } } });
     } finally { process.argv[1] = entry; }
-    assert.deepEqual(injections[0].deps, ['agents', 'timer'], 'no startup recovery runs before these services activate');
+    assert.deepEqual(injections[0].deps, ['timer'], 'disk recovery waits for disposable timers without depending on optional agents');
   }
   const f = fixture(t);
   writePatchPreferences(f.root, f.home, { enabled: true, autoMaintenance: true });
@@ -384,19 +384,39 @@ test('real backend snapshots validate frontend after all manual actions', async 
 });
 
 
-test('old or mismatched web clients cannot use fresh tickets or create a maintenance lock', async t => {
+test('incompatible maintenance protocols cannot use fresh tickets or create a maintenance lock', async t => {
   const f = fixture(t), before = await f.controller.snapshot();
   assert.equal(before.pluginVersion, pluginVersion); assert.equal(before.maintenanceProtocol, MAINTENANCE_PROTOCOL);
   const files = f.files.map(file => fs.readFileSync(file));
   const raw = { action: 'restore-only', confirmation: 'CONFIRM PATCH OPERATION', token: before.token };
-  for (const input of [raw, { ...raw, ...protocol, clientVersion: '0.3.5' }, { ...raw, ...protocol, maintenanceProtocol: 1 }]) {
+  for (const input of [raw, { ...raw, ...protocol, maintenanceProtocol: 1 }, { ...raw, ...protocol, maintenanceProtocol: 3 }]) {
     await assert.rejects(f.controller.restore(input), { code: 'CLIENT_VERSION_MISMATCH' });
     assert.equal(fs.existsSync(f.home), false);
     assert.deepEqual(f.files.map(file => fs.readFileSync(file)), files);
   }
   assert.equal((await f.controller.snapshot()).token, before.token, 'rejected stale clients do not consume valid consent');
-  const result = await f.controller.restore({ ...raw, ...protocol });
+  const result = await f.controller.restore({ ...raw, ...protocol, clientVersion: '0.3.5' });
   assert.equal(result.phase, 'restored');
+});
+
+test('version-label changes alone do not invalidate an apply ticket or require another click', async t => {
+  const f = fixture(t);
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.root, 'initial-backups'));
+  const before = await f.controller.snapshot();
+  assert.equal(before.canApply, true);
+  fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.3.0-port.1+build.2' }));
+  for (const file of f.files) {
+    const metadata = path.join(path.dirname(path.dirname(file)), 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(metadata, 'utf8'));
+    fs.writeFileSync(metadata, JSON.stringify({ ...pkg, version: '0.4.0-mobile.2' }));
+  }
+  const refreshed = await f.controller.snapshot();
+  assert.equal(refreshed.token, before.token);
+  assert.equal(refreshed.compatibility.hostVersion, '0.3.0-port.1+build.2');
+  assert.ok(refreshed.compatibility.files.every(file => file.installedVersion === '0.4.0-mobile.2'));
+  const result = await f.controller.restore({ ...protocol, clientVersion: '0.3.5', action: 'apply', confirmation: 'CONFIRM PATCH OPERATION', token: before.token });
+  assert.equal(result.phase, 'applied');
+  assert.ok(planPatches(f.root, 'check', f.artifacts).every(plan => plan.state === 'patched'));
 });
 
 test('late-file conflicts disable the batch but keep fixed per-file diagnosis and program hashes', async t => {

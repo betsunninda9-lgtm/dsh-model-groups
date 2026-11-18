@@ -54,10 +54,12 @@ test('manifest, native package, host package, and missing target invalidate cach
   fs.writeFileSync(item.manifest, JSON.stringify(manifest)); assert.equal(f.inspect().files[0].state, 'pristine');
   const pkg = JSON.parse(fs.readFileSync(item.pkg, 'utf8'));
   fs.writeFileSync(item.pkg, JSON.stringify({ ...pkg, version: '0.2.3' }));
-  assert.equal(f.inspect().files[0].code, 'package_version');
+  assert.equal(f.inspect().files[0].code, 'not_applied');
+  assert.equal(f.inspect().files[0].installedVersion, '0.2.3');
   fs.writeFileSync(item.pkg, JSON.stringify(pkg));
   fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.3' }));
-  assert.equal(f.inspect().files[0].code, 'host_version');
+  assert.equal(f.inspect().hostVersion, '0.2.3');
+  assert.equal(f.inspect().files[0].code, 'not_applied');
   fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }));
   assert.equal(f.inspect().files[0].state, 'pristine');
   assert.equal(fs.realpathSync(item.file), item.file); fs.unlinkSync(item.file);

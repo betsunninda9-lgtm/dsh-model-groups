@@ -10,7 +10,7 @@ export function ModelGroupsSettingsPage() {
   const snapshot = state.snapshot;
   const phaseLabels = { idle: '检查完成，可选择操作', applied: '多密钥已应用（磁盘状态）', restored: '多密钥已关闭，插件仍保留（磁盘状态）', removing: '正在卸载，尚未确认完成', removed: '已确认关闭多密钥并卸载插件', failed: '维护失败，未确认完成' };
   const updatesAvailable = snapshot?.patches.some(patch => patch.updateAvailable) ?? false;
-  const statusLabel = snapshot?.versionMismatch ? '网页与维护后端版本不一致，请先重启并刷新' : snapshot?.phase === 'idle'
+  const statusLabel = snapshot?.versionMismatch ? '网页与后端的维护协议不兼容，请刷新网页后重试' : snapshot?.phase === 'idle'
     ? snapshot.preferences?.enabled === false ? '仅使用分组与折叠，多密钥尚未启用' : snapshot.patches.some(patch => patch.state === 'conflict') ? '磁盘文件校验冲突，已停止整批维护'
       : snapshot.patches.some(patch => patch.applySupported === false) ? '旧补丁已识别，但此构建不支持新版协议补丁'
       : updatesAvailable ? '旧多密钥补丁已应用，可更新补丁'

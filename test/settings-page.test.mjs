@@ -157,7 +157,7 @@ for (const changed of [sample({ token: 'new-token' }), sample({ canRestore: fals
   });
 }
 
-for (const changed of [sample({ canApply: true, token: 'new-token' }), sample({ canApply: false }), sample({ canApply: true, pluginVersion: '0.3.5' })]) {
+for (const changed of [sample({ canApply: true, token: 'new-token' }), sample({ canApply: false }), sample({ canApply: true, maintenanceProtocol: 1 })]) {
   test('direct apply still aborts on changed preflight state without POST', async () => {
     const initial = sample({ canApply: true });
     const app = ui([response(initial), response(changed)]); await app.settle();
@@ -165,7 +165,7 @@ for (const changed of [sample({ canApply: true, token: 'new-token' }), sample({ 
     assert.equal(app.button('确认执行'), undefined);
     await app.settle();
     assert.deepEqual(app.calls.map(call => call[1].method), ['GET', 'GET']);
-    assert.match(app.text(), /未执行操作|版本不一致/);
+    assert.match(app.text(), /未执行操作|维护协议不兼容/);
     assert.deepEqual(app.removed, []); app.dispose();
   });
 }
@@ -289,20 +289,36 @@ test('unmounted page ignores POST response and does not clear storage', async ()
 });
 
 
-for (const mismatch of [{ pluginVersion: '0.3.5', maintenanceProtocol: 2 }, { pluginVersion, maintenanceProtocol: 1 }, { pluginVersion: null, maintenanceProtocol: null }]) {
+for (const backendVersion of ['0.3.5', '0.3.12-beta.2', '0.5.0-port.1+build.7', null]) {
+  test(`compatible protocol permits a different backend package version: ${backendVersion}`, async () => {
+    const initial = sample({ pluginVersion: backendVersion, canApply: true, patches: [{ state: 'pristine' }], preferences: { enabled: true, autoMaintenance: true } });
+    const app = ui([response(initial), response(sample({ ...initial, pluginVersion: '0.4.0-next.1' })),
+      response(sample({ pluginVersion: backendVersion, phase: 'applied', restartRequired: true }))]);
+    await app.settle();
+    assert.equal(app.button('启用多密钥').props.disabled, false);
+    assert.equal(app.inputs().find(input => input.props.role === 'switch').props.disabled, false);
+    assert.doesNotMatch(app.text(), /维护协议不兼容/);
+    app.click('启用多密钥'); await app.settle();
+    assert.deepEqual(app.calls.map(call => call[1].method), ['GET', 'GET', 'POST']);
+    assert.match(app.text(), /多密钥已应用/);
+    app.dispose();
+  });
+}
+
+for (const mismatch of [{ pluginVersion, maintenanceProtocol: 1 }, { pluginVersion: null, maintenanceProtocol: null }]) {
   test(`stale backend ${JSON.stringify(mismatch)} disables maintenance and preserves preferences`, async () => {
     const app = ui([response(sample({ ...mismatch, phase: 'removed' }))]); await app.settle();
     assert.equal(app.calls.length, 1); assert.equal(app.button('关闭并卸载插件').props.disabled, true);
     assert.equal(app.button('启用多密钥').props.disabled, true); assert.equal(app.button('关闭多密钥').props.disabled, true);
-    assert.match(app.text(), /版本不一致/); assert.doesNotMatch(app.text(), /卸载已确认|已确认关闭多密钥并卸载插件/); assert.deepEqual(app.removed, []); app.dispose();
+    assert.match(app.text(), /维护协议不兼容/); assert.doesNotMatch(app.text(), /卸载已确认|已确认关闭多密钥并卸载插件/); assert.deepEqual(app.removed, []); app.dispose();
   });
 }
 
-test('backend version changing between initial GET and confirmation never POSTs', async () => {
-  const app = ui([response(sample()), response(sample({ pluginVersion: '0.3.5' }))]); await app.settle();
+test('backend maintenance protocol changing before confirmation never POSTs', async () => {
+  const app = ui([response(sample()), response(sample({ maintenanceProtocol: 1 }))]); await app.settle();
   app.click('关闭多密钥'); app.click('确认执行'); await app.settle();
   assert.deepEqual(app.calls.map(call => call[1].method), ['GET', 'GET']);
-  assert.match(app.text(), /版本不一致/); assert.deepEqual(app.removed, []); app.dispose();
+  assert.match(app.text(), /维护协议不兼容/); assert.deepEqual(app.removed, []); app.dispose();
 });
 
 test('compatibility guidance renders and copies only allowlisted identifiers, versions and hashes', async () => {
@@ -311,7 +327,7 @@ test('compatibility guidance renders and copies only allowlisted identifiers, ve
       { id: '/PRIVATE_PATH', state: 'patched', code: 'ready', observedSha256: 'b'.repeat(64) },
       { id: 'api-remotes.patch.json', state: 'conflict', code: 'PRIVATE_CODE', installedVersion: 'PRIVATE_VERSION', observedSha256: 'PRIVATE_HASH' } ] };
   const app = ui([response(sample({ canRestore: false, canRestoreOnly: false, token: null, compatibility, patches: [{ state: 'conflict' }] }))]); await app.settle();
-  assert.match(app.text(), /未覆盖未知文件/); assert.match(app.text(), /不要先卸载、还原补丁或删除配置/);
+  assert.match(app.text(), /版本号不同本身不会触发拒绝/); assert.match(app.text(), /不要先卸载、还原补丁或删除(?:配置|密钥)/);
   assert.match(app.text(), /磁盘文件校验冲突/); assert.doesNotMatch(app.text(), /旧补丁已识别，但此构建不支持新版协议补丁/);
   assert.match(app.text(), /pi-ai.patch.json/); assert.match(app.text(), new RegExp('a'.repeat(64)));
   assert.doesNotMatch(app.text(), /PRIVATE_/);

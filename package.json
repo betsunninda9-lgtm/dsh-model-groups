@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-groups",
-  "version": "0.3.12-beta.2",
-  "description": "在 DSH 网页端按供应商和密钥配置选择模型，并为同一供应商的不同密钥分别设置模型和 API 协议。支持 DSH 0.2.2-rc.1。",
+  "version": "0.3.12-beta.3",
+  "description": "在 DSH 网页端按供应商和密钥配置选择模型，并为不同密钥设置独立模型和协议；多密钥按宿主实际代码判断兼容，不锁定单一 DSH 版本。",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -45,8 +45,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=22",
-    "dsh": "0.2.2-rc.1"
+    "node": ">=22"
   },
   "dsh": {
     "bundle": {

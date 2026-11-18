@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { patchStorage, readPatchPreferences, writePatchPreferences } from './patch-preferences.js';
 import { planPatches, inspectPatches, applyPlan, sha256 } from '../scripts/native-patches.mjs';
+import { compatibilitySnapshot } from './compatibility.js';
 
 export const BUNDLE_NAME = 'dsh-model-groups';
 export const MAINTENANCE_PROTOCOL = 2;
@@ -58,7 +59,7 @@ export function createUnavailableMaintenance() {
   const blocker = { code: 'HOST_UNKNOWN', message: '无法验证当前宿主安装，不会修改未知文件。' };
   return {
     snapshot: async () => ({ phase: 'failed', maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion,
-      compatibility: { schema: 1, pluginVersion, hostVersion: null, supportedDsh: pluginPackage.engines.dsh, files: [] },
+      compatibility: { schema: 1, pluginVersion, hostVersion: null, supportedDsh: null, compatibilityPolicy: 'code', files: [] },
       restartRequired: false, preferences: { enabled: false, autoMaintenance: false }, patches: [], blockers: [blocker], warnings: [], canRestore: false, canRestoreOnly: false, canApply: false, token: null }),
     restore: async () => { throw { ...blocker }; },
   };
@@ -82,14 +83,15 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
         const disk = inspectPatches(root, artifacts);
         if (!disk.files.length || disk.files.some(p => !['ready', 'update_available', 'not_applied', 'unsupported_patch_build'].includes(p.code))) throw new Error('conflict');
         plans = disk.files.map(p => ({ name: p.id, state: p.state, updateAvailable: p.code === 'update_available', applySupported: p.code !== 'unsupported_patch_build',
-          observedSha256: p.observedSha256, baseSha256: p.baseSha256, targetSha256: p.targetSha256, artifact: { version: p.installedVersion } }));
+          observedSha256: p.observedSha256, baseSha256: p.baseSha256, targetSha256: p.targetSha256,
+          hostVersion: disk.hostVersion, installedVersion: p.installedVersion }));
       }
       if (plans.some(plan => plan.applySupported === false)) blockers.push(generic('UNSUPPORTED_PATCH_BUILD', '此宿主构建仅能识别旧补丁，尚无经过验证的新版协议补丁；不会执行不完整更新。仍可关闭或卸载。'));
     }
-    catch { blockers.push(generic('PATCH_CONFLICT', '宿主版本或文件校验不匹配；未修改任何宿主文件，请先处理冲突。')); }
-    compatibility = plans.length ? { schema: 1, pluginVersion, hostVersion: '0.2.2-rc.1', supportedDsh: pluginPackage.engines.dsh,
-      files: plans.map(p => ({ id: p.name, state: p.state, code: !p.applySupported ? 'unsupported_patch_build' : p.updateAvailable ? 'update_available' : p.state === 'pristine' ? 'not_applied' : 'ready', installedVersion: p.artifact.version,
-        observedSha256: p.observedSha256, baseSha256: p.baseSha256, targetSha256: p.targetSha256 })) } : inspectPatches(root, artifacts);
+    catch { blockers.push(generic('PATCH_CONFLICT', '宿主关键代码、程序包身份或补丁配方无法匹配；未修改任何宿主文件，请查看具体冲突。')); }
+    compatibility = plans.length ? compatibilitySnapshot({ schema: 1, pluginVersion, hostVersion: plans[0].hostVersion, supportedDsh: null, compatibilityPolicy: 'code',
+      files: plans.map(p => ({ id: p.name, state: p.state, code: !p.applySupported ? 'unsupported_patch_build' : p.updateAvailable ? 'update_available' : p.state === 'pristine' ? 'not_applied' : 'ready', installedVersion: p.installedVersion,
+        observedSha256: p.observedSha256, baseSha256: p.baseSha256, targetSha256: p.targetSha256 })) }) : inspectPatches(root, artifacts);
     compatibility.pluginVersion = pluginVersion;
     try {
       const report = await inspect({ detailed });
@@ -111,10 +113,12 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     // Applying stages code for the next engine start. Running conversations and
     // uninstall eligibility do not change whether the file transformation is valid.
     const applyBlockers = hard.filter(b => ['patch_conflict', 'unsupported_patch_build', 'other_process'].includes(b.code.toLowerCase()));
-    const programs = plans.map(p => [p.name, p.observedSha256, !!p.updateAvailable, p.applySupported]);
+    const programs = plans.map(p => [p.name, p.observedSha256, p.baseSha256, p.targetSha256, !!p.updateAvailable, p.applySupported]);
+    // Version labels are diagnostic only. Consent follows the actual program/recipe
+    // hashes and permissions, so metadata changes alone do not add another click.
     return { plans, compatibility, blockers: hard, warnings, removable,
-      applyStamp: sha256(JSON.stringify([pluginVersion, compatibility, applyBlockers, programs])),
-      stamp: sha256(JSON.stringify([pluginVersion, compatibility, hard, removable, programs])) };
+      applyStamp: sha256(JSON.stringify([MAINTENANCE_PROTOCOL, applyBlockers, programs])),
+      stamp: sha256(JSON.stringify([MAINTENANCE_PROTOCOL, hard, removable, programs])) };
   }
   function view(report, executing = false) {
     const valid = report.plans.length > 0 && !report.blockers.some(b => b.code.toLowerCase() === 'patch_conflict');
@@ -139,7 +143,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
   }
   async function restore(input) {
     if (busy) throw generic('BUSY', '已有维护任务正在执行。');
-    if (input?.maintenanceProtocol !== MAINTENANCE_PROTOCOL || input?.clientVersion !== pluginVersion) throw generic('CLIENT_VERSION_MISMATCH', '网页与维护后端版本不一致，请重启原引擎并刷新网页后重新确认。');
+    if (input?.maintenanceProtocol !== MAINTENANCE_PROTOCOL) throw generic('CLIENT_VERSION_MISMATCH', '维护协议不兼容，请刷新网页后重试。');
     if (input.action === 'set-auto-maintenance') {
       if (typeof input.autoMaintenance !== 'boolean') throw generic('INVALID_PREFERENCES', '自动维护开关必须为布尔值。');
       const preferences = readPatchPreferences(root, home, artifacts);

@@ -58,9 +58,9 @@ export function apply(ctx) {
   let root, recovery;
   try {
     root = findDshRoot();
-    // Recovery needs both live agents and a disposable retry timer. Cordis row
-    // order does not guarantee service availability during plugin activation.
-    ctx.inject(['agents', 'timer'], child => {
+    // Wait for disposable timers; task inspection is not required to stage disk patches.
+    // Cordis row order does not guarantee timer availability during activation.
+    ctx.inject(['timer'], child => {
       startRecovery(child, root, home, result => { recovery = result; });
     });
   } catch {

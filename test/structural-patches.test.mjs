@@ -77,6 +77,56 @@ test('unknown builds use changed fragments without registering whole-file hashes
   assert.ok(f.targets.every(file => fs.readFileSync(file, 'utf8') === f.host));
 });
 
+test('known legacy bases without a current hash mapping upgrade through compatible code', t => {
+  const f = fixture(t), name = ARTIFACTS[0];
+  const manifestFile = path.join(f.artifacts, name);
+  const current = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+  const legacyOutput = f.host.replace('source.apiKey', 'oldSelection.apiKey');
+  const manifest = { ...current, current: true, requiresCurrent: true, variants: [{
+    baseSha256: sha256(f.host), resultSha256: sha256(legacyOutput),
+    replacements: [{ before: f.host, after: legacyOutput }],
+  }] };
+  fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+  for (const observed of [f.host, legacyOutput]) {
+    fs.writeFileSync(f.targets[0], observed);
+    const plan = planPatches(f.root, 'apply', f.artifacts)[0];
+    assert.equal(plan.applySupported, true);
+    assert.equal(plan.compatibility, 'fragments');
+    assert.ok(plan.result.includes('selected.apiKey'));
+    assert.ok(plan.result.includes('send(key, url, selected.id)'));
+    assert.ok(plan.result.includes('const headers = source.headers;'));
+    applyPlan(planPatches(f.root, 'apply', f.artifacts), path.join(f.root, 'backups'));
+    assert.equal(applyPlan(planPatches(f.root, 'apply', f.artifacts), path.join(f.root, 'backups')), 0);
+    applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.root, 'backups'));
+    assert.equal(fs.readFileSync(f.targets[0], 'utf8'), f.host);
+  }
+});
+
+test('an exact legacy recipe preserves native current-looking code and restores only its own change', t => {
+  const f = fixture(t);
+  const manifestFile = path.join(f.artifacts, ARTIFACTS[0]);
+  const original = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+  const oldFn = 'export function route() { return "old"; }';
+  const newFn = 'export function route() { return "new"; }';
+  const primaryBase = oldFn + '\nexport const legacyFeature = false;\n// old host build\n';
+  const primaryOutput = primaryBase.replace(oldFn, newFn);
+  const legacyBase = newFn + '\nexport const legacyFeature = false;\n// newer host has route natively\n';
+  const legacyOutput = legacyBase.replace('legacyFeature = false', 'legacyFeature = true');
+  fs.writeFileSync(manifestFile, JSON.stringify({ ...original, current: true, requiresCurrent: true,
+    baseSha256: sha256(primaryBase), resultSha256: sha256(primaryOutput), replacements: [{ before: oldFn, after: newFn }],
+    variants: [{ baseSha256: sha256(legacyBase), resultSha256: sha256(legacyOutput),
+      replacements: [{ before: 'legacyFeature = false', after: 'legacyFeature = true' }] }] }));
+  for (const observed of [legacyBase, legacyOutput]) {
+    fs.writeFileSync(f.targets[0], observed);
+    assert.equal(planPatches(f.root, 'check', f.artifacts)[0].applySupported, false);
+    assert.equal(planPatches(f.root, 'revert', f.artifacts)[0].result, legacyBase);
+    assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /No verified current patch/);
+    assert.equal(fs.readFileSync(f.targets[0], 'utf8'), observed);
+    applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.root, 'backups'));
+    assert.equal(fs.readFileSync(f.targets[0], 'utf8'), legacyBase);
+  }
+});
+
 test('one missing changed region blocks all five targets before backups or writes', t => {
   const f = fixture(t);
   fs.writeFileSync(f.targets[4], 'export const unrelated = true;');
@@ -109,17 +159,18 @@ test('generated discovery variants all receive keyEntryId while trailing headers
   assert.throws(() => planPatches(f.root, 'apply', f.artifacts), /unrecognized content/, 'partial schema patch must not be duplicated');
 });
 
-for (const patched of [false, true]) test(`real host with custom headers and unrelated changes: ${patched ? 'already patched' : 'pristine'} roundtrip`, t => {
+for (const [hostVersion, childVersion] of [['0.2.2-rc.1', '0.2.2-rc.1'], ['0.3.0-android.7+port.1', '0.4.0-mobile.2']])
+for (const patched of [false, true]) test(`real host with custom headers and unrelated changes (${hostVersion}): ${patched ? 'already patched' : 'pristine'} roundtrip`, t => {
   if (!process.env.DSH_ROOT) return t.skip('Set DSH_ROOT; only temporary copies are modified');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fragments-'));
   t.after(() => { assert.equal(fs.realpathSync(tmp), tmp); assert.ok(path.basename(tmp).startsWith('dsh-fragments-')); fs.rmSync(tmp, { recursive: true }); });
-  fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }));
+  fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: hostVersion }));
   const known = planPatches(process.env.DSH_ROOT, patched ? 'apply' : 'revert');
   const originals = [];
   for (const plan of known) {
     const file = path.join(tmp, plan.artifact.target);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(path.join(tmp, 'node_modules', plan.artifact.packageName, 'package.json'), JSON.stringify({ name: plan.artifact.packageName, version: '0.2.2-rc.1' }));
+    fs.writeFileSync(path.join(tmp, 'node_modules', plan.artifact.packageName, 'package.json'), JSON.stringify({ name: plan.artifact.packageName, version: childVersion }));
     let content = plan.result + '\n// custom mobile runtime build\n';
     // Mirrors an additive field next to the generated interrogation schema.
     if (plan.name === 'llm-typert.host.patch.json') content = content.replace('    apiKey?: string;', '    apiKey?: string;\\n    headers?: Array<{ name: string; value: string; }>;');
@@ -128,6 +179,7 @@ for (const patched of [false, true]) test(`real host with custom headers and unr
   }
   const plans = planPatches(tmp, 'apply');
   assert.ok(plans.every(item => item.compatibility === 'fragments'));
+  assert.ok(plans.every(item => item.hostVersion === hostVersion && item.installedVersion === childVersion));
   assert.ok(plans.every(item => item.state === (patched ? 'patched' : 'pristine')));
   applyPlan(plans, path.join(tmp, 'backups'));
   assert.ok(planPatches(tmp).every(item => item.state === 'patched'));

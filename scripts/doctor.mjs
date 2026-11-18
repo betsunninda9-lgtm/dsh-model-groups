@@ -14,13 +14,13 @@ if (args.includes('--help')) {
     const compatibility = inspectPatches(args[i + 1]);
     const conflict = compatibility.files.some(file => file.state === 'conflict');
     const ready = compatibility.files.every(file => file.code === 'ready');
-    const report = { plugin: pkg.name, version: pkg.version, supportedDsh: pkg.engines.dsh,
+    const report = { plugin: pkg.name, version: pkg.version, supportedDsh: null, compatibilityPolicy: 'code',
       diskPatchesReady: ready, runtimeVerified: false, compatibility,
       files: compatibility.files.map(file => ({ ...file, updateAvailable: file.code === 'update_available',
         applySupported: ['ready', 'update_available', 'not_applied'].includes(file.code) })),
       next: compatibilityGuidance(compatibility) || (ready
         ? '磁盘补丁齐全。请确认原 DSH 服务已在应用补丁后重启，并刷新网页；本检查不能证明运行中的模块已刷新。'
-        : '请在设置 → 模型分组中确认启用，再重启原 DSH 服务并刷新网页。') };
+        : '多密钥补丁尚未应用，可在设置 → 模型分组中启用；按实际代码结构判断兼容，不受单一 DSH 版本号限制。') };
     if (args.includes('--json')) console.log(JSON.stringify(report, null, 2));
     else {
       console.log(`${report.plugin} ${report.version} · DSH ${compatibility.hostVersion ?? 'unknown'}`);
