@@ -41,8 +41,8 @@ export function maintenanceCanAction(snapshot, action) {
 export function maintenanceCanRestore(snapshot) { return maintenanceCanAction(snapshot, 'restore-and-uninstall'); }
 export function maintenanceBlockerText(blocker) {
   const labels = {
-    active_sessions: '存在正在运行的会话，请先停止运行中的任务。',
-    active_turns: '存在正在运行的回合，请先等待结束或停止。',
+    active_sessions: '运行中的会话会限制关闭和卸载；启用或更新磁盘补丁仍可执行。',
+    active_turns: '运行中的回合会限制关闭和卸载；启用或更新磁盘补丁仍可执行。',
     patch_conflict: '补丁状态冲突，不会强制覆盖。请复制脱敏诊断；不要先卸载、还原或删除配置。',
     client_version_mismatch: '网页与插件后端版本不一致，已禁止维护。请重启原引擎并刷新网页后重新检查。',
     unsupported_patch_build: '此宿主构建尚无经过验证的新版协议补丁，已阻止不完整更新；仍可关闭或卸载，不会改动密钥。',

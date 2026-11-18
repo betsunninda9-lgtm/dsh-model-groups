@@ -29,9 +29,9 @@ export function findDshRoot(entry = process.argv[1]) {
   throw new Error('未找到与当前 DSH 进程一致且可安全修改的安装目录。');
 }
 
-export function startupActivity(ctx, root, processDirectory = '/proc') {
+export function startupActivity(ctx, root, processDirectory = '/proc', { includeTasks = true } = {}) {
   try {
-    if (ctx.agents?.list) for (const agent of ctx.agents.list()) {
+    if (includeTasks && ctx.agents?.list) for (const agent of ctx.agents.list()) {
       if (agent.status !== 'idle' || (agent.phase && agent.phase.kind !== 'idle')) return 'active-tasks';
     }
     for (const entry of fs.readdirSync(processDirectory, { withFileTypes: true })) {

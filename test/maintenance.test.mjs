@@ -249,11 +249,30 @@ test('already pristine files do not offer redundant close-only action',async t=>
   const state=await f.controller.snapshot();
   assert.equal(state.canRestoreOnly,false); assert.equal(state.canApply,true); assert.equal(state.canRestore,true);
 });
-test('apply rejects active inspection blockers and unknown file states', async t => {
+test('apply permits active conversations but rejects conflicting program changes', async t => {
   const f = fixture(t,{inspect:async()=>({blockers:[{code:'active_turns',message:'stop'}],fingerprint:'x'})});
   applyPlan(planPatches(f.root,'revert',f.artifacts),path.join(f.home,'isolated-backup'));
+  const before = await f.controller.snapshot();
+  assert.equal(before.canApply,true);
+  const result = await f.controller.restore({...protocol,action:'apply',token:before.token,confirmation:'CONFIRM PATCH OPERATION'});
+  assert.equal(result.phase,'applied'); assert.equal(result.restartRequired,true);
+  assert.equal((await f.controller.snapshot()).canRestoreOnly,false);
+  fs.writeFileSync(f.files[0], 'incompatible host program');
   assert.equal((await f.controller.snapshot()).canApply,false);
  });
+test('task and uninstall-permission changes do not invalidate an apply ticket', async t => {
+  let active = false, removable = true;
+  const f = fixture(t, { inspect: async () => ({ blockers: active ? [{ code: 'active_turns', message: 'busy' }] : [], fingerprint: String(active) }),
+    manager: { listBundles: async () => [{ name: 'dsh-model-groups', removable, installed: true, enabled: true }] } });
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.home, 'isolated-backup'));
+  const before = await f.controller.snapshot();
+  active = true; removable = false;
+  const result = await f.controller.restore({ ...protocol, action: 'apply', token: before.token, confirmation: 'CONFIRM PATCH OPERATION' });
+  assert.equal(result.phase, 'applied');
+  assert.equal(result.canRestoreOnly, false);
+  assert.equal(result.canRestore, false);
+});
+
 test('startup automatically repairs replaced host programs and shares restart evidence with maintenance', async t => {
   const f = fixture(t);
   writePatchPreferences(f.root, f.home, { enabled: true, autoMaintenance: true });
@@ -322,6 +341,36 @@ test('deferred recovery retries on a managed timer, stops on completion or failu
   const ctx = { setInterval(callback) { tick = callback; return () => { cleared++; }; }, on(event, callback) { dispose = callback; } };
   retryDeferredRecovery(ctx, () => { throw Error('disposed callbacks must not run'); }, () => {});
   dispose(); tick(); assert.equal(cleared, 1);
+});
+
+test('startup waits for timer and agent services, then recovers after busy work ends', async t => {
+  const { apply, startRecovery, retryDeferredRecovery } = await import('../src/index.js');
+  assert.throws(() => retryDeferredRecovery({}, () => null, () => {}), /定时器服务不可用/);
+  if (process.env.DSH_ROOT) {
+    const entry = process.argv[1], injections = [];
+    try {
+      process.argv[1] = path.join(process.env.DSH_ROOT, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
+      apply({ inject(deps, callback) { injections.push({ deps, callback }); }, logger: { error(message) { assert.fail(message); } } });
+    } finally { process.argv[1] = entry; }
+    assert.deepEqual(injections[0].deps, ['agents', 'timer'], 'no startup recovery runs before these services activate');
+  }
+  const f = fixture(t);
+  writePatchPreferences(f.root, f.home, { enabled: true, autoMaintenance: true });
+  applyPlan(planPatches(f.root, 'revert', f.artifacts), path.join(f.home, 'test-backups'));
+  let busy = true, tick, cleared = 0;
+  const results = [];
+  const ctx = { logger: { info() {}, warn() {}, error() {} }, interval(callback) { tick = callback; return () => { cleared++; }; }, on() {} };
+  startRecovery(ctx, f.root, f.home, result => results.push(result), { artifacts: f.artifacts, activity: () => busy ? 'active-tasks' : null });
+  assert.equal(results.at(-1).state, 'deferred');
+  tick(); assert.equal(results.at(-1).reason, 'active-tasks');
+  assert.ok(planPatches(f.root, 'check', f.artifacts).every(p => p.state === 'pristine'));
+  busy = false; tick();
+  assert.equal(results.at(-1).state, 'restart-required');
+  assert.equal(cleared, 1);
+  assert.ok(planPatches(f.root, 'check', f.artifacts).every(p => p.state === 'patched'));
+  let failedTick, stopped = 0;
+  retryDeferredRecovery({ interval(callback) { failedTick = callback; return () => { stopped++; }; }, on() {} }, () => { throw Error('inspection failed'); }, result => assert.equal(result.state, 'failed'));
+  failedTick(); assert.equal(stopped, 1);
 });
 
 test('real backend snapshots validate frontend after all manual actions', async t => {

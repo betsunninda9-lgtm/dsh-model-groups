@@ -108,13 +108,19 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     const hardCodes = new Set(['patch_conflict', 'unsupported_patch_build', 'active_turns', 'other_process', 'not_removable', 'manager_unavailable']);
     const warnings = blockers.filter(b => !hardCodes.has(b.code.toLowerCase()));
     const hard = blockers.filter(b => hardCodes.has(b.code.toLowerCase()));
-    return { plans, compatibility, blockers: hard, warnings, removable, stamp: sha256(JSON.stringify([pluginVersion, compatibility, hard, removable, plans.map(p => [p.name, p.observedSha256, !!p.updateAvailable, p.applySupported])])) };
+    // Applying stages code for the next engine start. Running conversations and
+    // uninstall eligibility do not change whether the file transformation is valid.
+    const applyBlockers = hard.filter(b => ['patch_conflict', 'unsupported_patch_build', 'other_process'].includes(b.code.toLowerCase()));
+    const programs = plans.map(p => [p.name, p.observedSha256, !!p.updateAvailable, p.applySupported]);
+    return { plans, compatibility, blockers: hard, warnings, removable,
+      applyStamp: sha256(JSON.stringify([pluginVersion, compatibility, applyBlockers, programs])),
+      stamp: sha256(JSON.stringify([pluginVersion, compatibility, hard, removable, programs])) };
   }
   function view(report, executing = false) {
     const valid = report.plans.length > 0 && !report.blockers.some(b => b.code.toLowerCase() === 'patch_conflict');
     const restoreBlockers = report.blockers.filter(b => b.code.toLowerCase() !== 'unsupported_patch_build');
     const dependencies = restoreBlockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
-    const installBlockers = report.blockers.filter(b => !['not_removable', 'manager_unavailable'].includes(b.code.toLowerCase()));
+    const installBlockers = report.blockers.filter(b => ['patch_conflict', 'unsupported_patch_build', 'other_process'].includes(b.code.toLowerCase()));
     const available = (!busy || executing) && phase !== 'removed';
     return { phase, maintenanceProtocol: MAINTENANCE_PROTOCOL, pluginVersion, preferences: readPatchPreferences(root, home, artifacts), compatibility: report.compatibility, restartRequired: restartRequired(), patches: report.plans.length ? report.plans.map(p => ({ name: p.name, state: p.state, updateAvailable: !!p.updateAvailable, applySupported: p.applySupported !== false })) : report.compatibility.files.map(p => ({ name: p.id, state: p.state, updateAvailable: p.code === 'update_available', applySupported: ['ready', 'update_available', 'not_applied'].includes(p.code) })), blockers: report.blockers, warnings: report.warnings,
       token: null, canApply: available && valid && installBlockers.length === 0 && report.plans.some(p => p.state === 'pristine' || p.updateAvailable),
@@ -126,7 +132,7 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
     const report = await assessment();
     const value = view(report);
     if (value.canRestore || value.canRestoreOnly || value.canApply) {
-      if (!ticket || ticket.stamp !== report.stamp || ticket.expires < now()) ticket = { token: crypto.randomBytes(32).toString('hex'), stamp: report.stamp, expires: now() + 120000 };
+      if (!ticket || ticket.stamp !== report.stamp || ticket.expires < now()) ticket = { token: crypto.randomBytes(32).toString('hex'), stamp: report.stamp, applyStamp: report.applyStamp, expires: now() + 120000 };
       value.token = ticket.token;
     }
     return value;
@@ -158,7 +164,8 @@ export function createMaintenance({ root, home, inspect, manager, artifacts, now
       const report = await assessment({ fresh: true, detailed: action !== 'apply' });
       const permissions = view(report, true);
        const permitted = action === 'apply' ? permissions.canApply : action === 'restore-only' ? permissions.canRestoreOnly : permissions.canRestore;
-       if (!permitted || report.stamp !== expected.stamp) throw generic('STATE_CHANGED', '文件或任务状态发生变化，请确认没有任务运行后重试。');
+       const unchanged = action === 'apply' ? report.applyStamp === expected.applyStamp : report.stamp === expected.stamp;
+       if (!permitted || !unchanged) throw generic('STATE_CHANGED', '文件或操作权限发生变化，请刷新检查后重试。');
       if (action === 'apply') {
         const previousPreferences = readPatchPreferences(root, home, artifacts);
         changeFiles(planPatches(root, 'apply', artifacts));

@@ -16,7 +16,11 @@ export function compatibilitySnapshot(value) {
 export function patchStatusMessage(status) {
   if (status?.restartRequired) return '多密钥程序文件已更新。请保存草稿，重启 DSH 引擎并刷新网页后使用。';
   if (status?.state === 'disabled' || status?.state === 'ready') return '';
-  if (status?.state === 'deferred') return '多密钥自动恢复已暂缓，将在任务和其他引擎空闲后自动重试。';
+  if (status?.state === 'deferred') {
+    if (status.reason === 'other-engine') return '发现另一个使用同一安装目录的 DSH 引擎，退出该引擎后自动重试。';
+    if (status.reason === 'activity-unverified') return '无法确认任务或进程状态，自动恢复暂缓；请在「设置 → 模型分组」查看详情。';
+    return '正在等待运行中的任务结束，之后自动恢复多密钥补丁。';
+  }
   if (status?.state === 'conflict') return '当前宿主的相关代码无法自动适配。请打开「设置 → 模型分组」查看详情。';
   if (status?.state === 'needs-repair') return '多密钥程序需要恢复。请打开「设置 → 模型分组」修复。';
   if (status?.failed) return '暂时无法检查多密钥状态，请在「设置 → 模型分组」重试。';

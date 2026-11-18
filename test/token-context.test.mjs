@@ -22,9 +22,37 @@ test('formatted already patched source is not patched twice', () => {
   if (revision) assert.equal(revision.latest, patched);
 });
 
-test('token context rejects ambiguous scopes and genuine identifier changes', () => {
+test('token context rejects ambiguous scopes and changed identifiers inside the minimum anchor', () => {
   assert.equal(tokenContextEdit(before + '\n' + before, before, edit), undefined);
-  assert.equal(tokenContextEdit(before.replace('schema', 'changed'), before, edit), undefined);
+  assert.equal(tokenContextEdit(before.replace('apiKey:', 'credential:'), before, edit), undefined);
+});
+test('adaptive contexts retain unrelated host token changes on either side', () => {
+  for (const source of [
+    before.replace('schema =', 'hostSchema ='), // 8-token left fails; 6-token left survives.
+    before.replace('z.object', 'runtime.object'), // Only 4-token left survives.
+    before.replace('apiKey: z.string()', 'apiKey: z.secret()'), // Only 4-token right survives.
+    before.replace('z.object', 'runtime.object').replace('apiKey: z.string()', 'apiKey: z.secret()'),
+  ]) {
+    const changed = tokenContextEdit(source, before, edit);
+    assert.ok(changed, source);
+    assert.equal(changed.replace(edit.text, ''), source);
+    assert.equal(changed.split(edit.text).length, 2);
+  }
+});
+test('a unique broad match cannot hide another position admitted by a smaller window', () => {
+  const second = before.replace('z.object', 'runtime.object');
+  assert.equal(tokenContextEdit(before + '\n' + second, before, edit), undefined);
+  assert.equal(tokenContextEdit(second + '\n' + before, before, edit), undefined);
+});
+test('adaptive replacement still requires exact changed bytes and safe token boundaries', () => {
+  const raw = 'const result = remote.send(model, exactValue, options);';
+  const start = raw.indexOf('exactValue');
+  const replacement = { start, end: start + 'exactValue'.length, text: 'chosenValue' };
+  const host = raw.replace('result', 'hostResult');
+  const changed = tokenContextEdit(host, raw, replacement);
+  assert.equal(changed, host.replace('exactValue', 'chosenValue'));
+  assert.equal(tokenContextEdit(host.replace('exactValue', 'otherValue'), raw, replacement), undefined);
+  assert.equal(tokenContextEdit(host, raw, { start: start + 1, end: replacement.end, text: 'value' }), undefined);
 });
 test('string/comment decoys are not executable anchors and line breaks retain semantics', () => {
   assert.equal(tokenContextEdit(JSON.stringify(before), before, edit), undefined);

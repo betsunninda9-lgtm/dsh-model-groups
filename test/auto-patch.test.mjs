@@ -63,6 +63,7 @@ test('startup activity checks live tasks and shared host processes without scann
   assert.equal(startupActivity({ agents: { list: () => [{ status: 'running', phase: { kind: 'idle' } }] } }, '/runtime', directory), 'active-tasks');
   assert.equal(startupActivity({ agents: { list: () => [{ status: 'idle', phase: { kind: 'maintenance' } }] } }, '/runtime', directory), 'active-tasks');
   assert.equal(startupActivity({ agents: { list: () => [{ status: 'idle' }] } }, '/runtime', directory), null);
+  assert.equal(startupActivity({ agents: { list: () => [{ status: 'running', phase: { kind: 'running' } }] } }, '/runtime', directory, { includeTasks: false }), null, 'staging a patch for the next restart does not stop running conversations');
   const process = path.join(directory, '99123'); fs.mkdirSync(process);
   fs.writeFileSync(path.join(process, 'cmdline'), '/usr/bin/node\0/other/node_modules/@deepseek-ai/dsh/lib/bin.js\0');
   assert.equal(startupActivity({}, '/runtime', directory), null);
