@@ -1,159 +1,294 @@
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import { createClientSource } from '../scripts/build.mjs';
+import { createDOM, createReact, createStore } from './helpers/picker-harness.mjs';
 
-const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
-function mount({ request, schedule = setTimeout, cancel = clearTimeout } = {}) {
-  const events = new Map(), windowEvents = new Map(), styles = [], notices = [];
-  const window = { addEventListener: (name, fn) => windowEvents.set(name, fn), removeEventListener: name => windowEvents.delete(name) };
-  const document = {
-    head: { appendChild: node => styles.push(node) },
-    body: { appendChild: node => notices.push(node) },
-    createElement: () => ({ dataset: {}, style: {}, children: [], appendChild(node) { this.children.push(node); }, setAttribute(name, value) { this[name] = value; }, remove() {
-      for (const list of [styles, notices]) { const at = list.indexOf(this); if (at >= 0) list.splice(at, 1); }
-    } }),
-    querySelector: selector => styles.find(node => selector.includes(JSON.stringify(node.dataset.pluginCss))) ?? null,
-    querySelectorAll: () => [...styles],
-  };
+const source = createClientSource();
+const clone = value => JSON.parse(JSON.stringify(value));
+const bridgeSnapshot = () => ({ status: 'ready', revision: 5, writable: true, providers: {
+  sample: { enabled: true, active: true, confirmed: true, keyEntries: {
+    work: { name: '工作', api: 'openai-completions', apiKeyEnv: 'WORK_KEY', models: [{ id: 'alpha', name: 'Alpha' }] },
+  } },
+} });
+const nativeSnapshot = () => ({ status: 'ready', revision: 2, value: { providers: {
+  sample: { baseURL: 'http://127.0.0.1:1234/v1', nativeOnly: 'retained' },
+  untouched: { models: [{ id: 'native' }] },
+} } });
+const response = (value, status = 200) => ({ ok: status >= 200 && status < 300, status,
+  json: async () => status >= 200 && status < 300 ? { ok: true, value } : { ok: false, code: 'PRIVATE_FAILURE', error: 'synthetic-private-detail' } });
+async function settle() { for (let pass = 0; pass < 20; pass++) await Promise.resolve(); }
+
+function mount({ request = () => response(bridgeSnapshot()), native = createStore(nativeSnapshot()), own = createStore({ status: 'ready', value: {} }), missingForms = false, editorAvailable = true } = {}) {
+  const dom = createDOM(), listeners = new Map(), events = new Map(), dependencies = [], registrations = [], removed = [], calls = [], formGets = [], directoryCalls = [], selections = [];
   let captured;
-  window.__ModuleLoader__ = { load: module => { captured = module; } };
-  vm.runInNewContext(source, { window, document, console, setTimeout: schedule, clearTimeout: cancel, ...(request ? { fetch: request } : {}) });
-  const plugin = captured.factory(id => id === 'react' ? { Component: class {} } : {});
-  const formsRequested = [], providersForm = {}, registrations = [], disposed = [], selections = [], loads = [];
-  let available = true;
-  const directory = { store: {}, load: () => { loads.push('load'); return Promise.resolve(); }, select: selection => { selections.push(selection); return Promise.resolve({ ok: true }); } };
+  const hooks = createReact(() => {});
+  const window = {
+    addEventListener(name, listener) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(listener); },
+    removeEventListener(name, listener) { listeners.get(name)?.delete(listener); },
+    __ModuleLoader__: { load(value) { captured = value; } },
+  };
+  const sandbox = { ...dom, window, console, URL, setTimeout, clearTimeout,
+    fetch: (url, init) => { calls.push({ url, init }); return request(url, init); },
+    setInterval() { throw new Error('the bridge must not poll the retired patch-status endpoint'); },
+    clearInterval() {}, ResizeObserver: class { observe() {} disconnect() {} },
+  };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(source, sandbox, { filename: 'dsh-model-groups/client.js' });
+  const plugin = captured.factory(name => {
+    if (name === 'react') return hooks.react;
+    if (name === 'react-dom') return { createPortal: child => child };
+    if (name === 'react/jsx-runtime') return { jsx: (type, props, key) => ({ type, props, key }), jsxs: (type, props, key) => ({ type, props, key }) };
+    return {};
+  });
   const ctx = {
-    on: (name, fn) => { const previous = events.get(name); events.set(name, previous ? () => { previous(); fn(); } : fn); },
-    configForms: { get: ns => { formsRequested.push(ns); return providersForm; } },
-    slots: { inject: (name, callback) => callback(), register: (options, component) => { registrations.push({ ...options, component }); return () => disposed.push(options.name); } },
-    modelDirectories: { directoryFor: () => directory },
-    sessions: { subagentAddress: () => available ? undefined : { external: true } },
-  };
-  return { plugin, ctx, notices, registrations, formsRequested, providersForm, disposed, selections, loads, events, windowEvents, setAvailable: value => { available = value; } };
-}
-
-function statusHarness(responses) {
-  const timers = new Map(), calls = [], cancelled = [];
-  let nextTimer = 0;
-  const app = mount({
-    request: async (...args) => {
-      calls.push(args);
-      assert.ok(responses.length, 'status requests need a synthetic response');
-      const next = responses.shift();
-      return typeof next === 'function' ? next() : { ok: true, json: async () => next };
+    on(name, listener) { events.set(name, listener); },
+    slots: {
+      inject(name, callback) { dependencies.push(name); return name === 'settings.models.provider-editor' && !editorAvailable ? () => {} : callback(); },
+      register(options, component) { const entry = { ...options, component }; registrations.push(entry); return () => { removed.push(entry.name); }; },
     },
-    schedule: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; },
-    cancel: id => { cancelled.push(id); timers.delete(id); },
-  });
-  app.plugin.apply(app.ctx);
-  return { ...app, calls, timers, cancelled,
-    async settle() { for (let i = 0; i < 12; i++) await Promise.resolve(); },
-    tick() {
-      assert.equal(timers.size, 1, 'one status timer is outstanding');
-      const [id, timer] = timers.entries().next().value;
-      assert.equal(timer.delay, 15_000);
-      timers.delete(id); timer.callback();
-    },
-    dispose() { app.events.get('dispose')(); },
+    configForms: missingForms ? undefined : { get(name) { formGets.push(name); return name === 'llm-pi-ai' ? native : own; } },
+    modelDirectories: { directoryFor(id) { directoryCalls.push(id); return { store: { id },
+      load: () => Promise.resolve(), select: value => { selections.push(value); return Promise.resolve(value); } }; } },
+    sessions: { subagentAddress: id => id === 'child' ? 'nested' : undefined },
   };
+  const dispose = plugin.apply(ctx);
+  const card = registrations.find(entry => entry.name === 'settings.models.footer');
+  const picker = registrations.find(entry => entry.name === 'conversation.input.model');
+  return { ...dom, hooks, plugin, ctx, listeners, events, dependencies, registrations, removed, calls, formGets, directoryCalls, selections, native, own, card, picker, dispose };
 }
 
-for (const terminal of [{ state: 'ready', restartRequired: true }, { state: 'ready', restartRequired: false }]) {
-  test(`deferred status polls after 15s then ${terminal.restartRequired ? 'shows restart notice' : 'removes ready notice'}`, async () => {
-    const app = statusHarness([{ state: 'deferred' }, terminal]);
-    await app.settle();
-    assert.equal(app.calls.length, 1);
-    assert.equal(app.calls[0][0], '/dsh-model-groups/status');
-    assert.equal(app.calls[0][1].credentials, 'same-origin');
-    assert.equal(app.calls[0][1].cache, 'no-store');
-    assert.equal(app.notices.length, 1);
-    assert.equal(app.notices[0].role, 'status');
-    assert.match(app.notices[0].children[0].textContent, /空闲后自动恢复/);
-    assert.match(app.notices[0].style.cssText, /65%,transparent/);
-    app.tick(); await app.settle();
-    assert.equal(app.calls.length, 2);
-    assert.equal(app.timers.size, 0, 'terminal status stops polling');
-    assert.equal(app.notices.length, terminal.restartRequired ? 1 : 0);
-    if (terminal.restartRequired) assert.match(app.notices[0].children[0].textContent, /重启引擎后生效/);
-    app.dispose(); assert.equal(app.notices.length, 0);
-  });
-}
-
-test('dismissed notice stays hidden during deferred polling but a changed status appears', async () => {
-  const app = statusHarness([{ state: 'deferred' }, { state: 'deferred' }, { state: 'ready', restartRequired: true }]);
-  await app.settle();
-  app.notices[0].children[1].onclick();
-  assert.equal(app.notices.length, 0);
-  app.tick(); await app.settle();
-  assert.equal(app.notices.length, 0);
-  app.tick(); await app.settle();
-  assert.equal(app.notices.length, 1);
-  app.dispose();
-});
-
-test('dispose removes the deferred banner and cancels its pending status timer', async () => {
-  const app = statusHarness([{ state: 'deferred' }]); await app.settle();
-  assert.equal(app.timers.size, 1);
-  const [id, timer] = app.timers.entries().next().value;
-  app.dispose();
-  assert.ok(app.cancelled.includes(id));
-  assert.equal(app.timers.size, 0); assert.equal(app.notices.length, 0);
-  timer.callback(); await app.settle();
-  assert.equal(app.calls.length, 1, 'even an already queued callback cannot fetch after disposal');
-});
-
-for (const late of [{ state: 'deferred' }, { state: 'ready', restartRequired: true }]) {
-  test(`late ${late.state} response after disposal cannot recreate a banner or timer`, async () => {
-    let resolve;
-    const app = statusHarness([{ state: 'deferred' }, () => new Promise(done => { resolve = done; })]);
-    await app.settle(); app.tick(); await app.settle();
-    assert.equal(app.calls.length, 2);
-    app.dispose();
-    resolve({ ok: true, json: async () => late }); await app.settle();
-    assert.equal(app.notices.length, 0); assert.equal(app.timers.size, 0);
-  });
-}
-
-test('picker shares native provider config and directory with no separate grouping UI', async () => {
+test('the production bundle registers optional editor, nonexclusive status footer and grouped picker', async () => {
   const app = mount();
-  const dispose = app.plugin.apply(app.ctx);
-  assert.deepEqual(app.formsRequested, ['llm-pi-ai']);
-  assert.equal(app.registrations.length, 2);
-  const picker = app.registrations.find(entry => entry.name === 'conversation.input.model');
-  assert.equal(picker.name, 'conversation.input.model');
-  assert.equal(picker.priority, -10);
-  assert.equal(picker.locale, 'model');
-  const settings = app.registrations.find(entry => entry.name === 'settings.section');
-  assert.equal(settings.id, 'dsh-model-groups');
-  assert.equal(settings.label, '模型分组');
-  assert.equal(typeof settings.component, 'function');
-  const props = picker.inject('session-a');
-  assert.equal(props.directory, app.ctx.modelDirectories.directoryFor().store);
-  assert.equal(props.providersForm, app.providersForm);
-  assert.equal('groupingForm' in props, false);
+  assert.equal(app.registrations.length, 3);
+  assert.deepEqual(app.dependencies, ['settings.models.provider-editor', 'settings.models.footer', 'conversation.input.model']);
+  assert.equal(app.card.id, 'model-groups-editor-status');
+  assert.equal(app.picker.priority, -10);
+  assert.equal(app.picker.locale, 'model');
+  assert.deepEqual(app.formGets, ['llm-pi-ai', 'model-groups']);
+  await settle();
+  assert.deepEqual(app.calls.map(call => call.url), ['/dsh-model-groups/bridge']);
+  assert.equal(app.card.inject().bridgeStore.getSnapshot().status, 'ready');
+  assert.equal(app.registrations.some(entry => entry.name === 'settings.section'), false);
+  assert.equal(app.document.body.children.length, 0, 'no detached compatibility banner is added');
+  assert.ok(!source.includes('/dsh-model-groups/status'));
+  assert.ok(!source.includes('/dsh-model-groups/maintenance'));
+  app.dispose();
+});
+
+test('the same confirmed providers form reaches grouped and fallback rendering and preserves native fields', async () => {
+  const app = mount(); await settle();
+  const injected = app.picker.inject('main');
+  const current = injected.providersForm.getSnapshot();
+  assert.equal(current.value.providers.sample.multiKey, true);
+  assert.equal(current.value.providers.sample.keyEntries.work.name, '工作');
+  assert.equal(current.value.providers.sample.nativeOnly, 'retained');
+  assert.equal(current.value.providers.untouched.models[0].id, 'native');
+  const boundary = new app.picker.component(injected);
+  const grouped = boundary.render();
+  assert.equal(grouped.props.providersForm, injected.providersForm);
+  boundary.state = { failed: true };
+  const fallback = boundary.render();
+  assert.notEqual(fallback.type, grouped.type);
+  assert.equal(fallback.props.providersForm, injected.providersForm);
+  await injected.select({ provider: 'sample', model: '@dsh-key/work/alpha' });
+  assert.deepEqual(app.selections, [{ provider: 'sample', model: '@dsh-key/work/alpha' }]);
+  app.dispose();
+});
+
+test('native and own namespace notifications coalesce in-flight refreshes and update the shared projection', async () => {
+  let state = bridgeSnapshot();
+  const app = mount({ request: () => response(clone(state)) });
+  await settle();
+  const form = app.picker.inject('main').providersForm;
+  assert.equal(form.getSnapshot().value.providers.sample.multiKey, true);
+  state = { ...state, revision: 6, providers: {} };
+  app.native.set({ ...nativeSnapshot(), revision: 3 });
+  app.own.set({ status: 'ready', value: { providers: {} }, revision: 2 });
+  await settle();
+  assert.equal(app.calls.length, 3, 'one refresh plus one trailing check retains notifications arriving in flight');
+  assert.equal(form.getSnapshot().value.providers.sample.multiKey, undefined);
+  app.dispose();
+});
+
+test('save uses one bridge operation with expectedRevision instead of frontend namespace mutations', async () => {
+  const app = mount({ request: (_url, init) => {
+    if (init?.method === 'POST') {
+      const body = JSON.parse(init.body);
+      assert.equal(body.action, 'save');
+      assert.equal(body.provider, 'sample');
+      assert.equal(body.expectedRevision, 5);
+      const next = bridgeSnapshot(); next.revision = 6; next.providers.sample.enabled = false;
+      return response(next);
+    }
+    return response(bridgeSnapshot());
+  } });
+  await settle();
+  const store = app.card.inject().bridgeStore;
+  const result = await store.save('sample', { enabled: false, keyEntries: {} }, 5);
+  assert.equal(result.ok, true);
+  assert.equal(store.getSnapshot().revision, 6);
+  assert.equal(app.calls.length, 2);
+  assert.deepEqual(app.calls.map(call => call.init.method ?? 'GET'), ['GET', 'POST']);
+  assert.equal(app.native.getSnapshot().revision, 2);
+  assert.equal(app.own.getSnapshot().revision, undefined);
+  app.dispose();
+});
+
+test('credential and selected-entry discovery use isolated bridge actions without exposing the key in snapshots', async () => {
+  const app = mount({ request: (_url, init) => {
+    if (!init?.method) return response(bridgeSnapshot());
+    const input = JSON.parse(init.body);
+    if (input.action === 'credential') return response({ ok: true });
+    if (input.action === 'discover') return response({ ok: true, models: [{ id: 'selected-model' }] });
+    throw new Error('unexpected operation');
+  } });
+  await settle();
+  const store = app.card.inject().bridgeStore;
+  assert.equal((await store.setCredential('WORK_KEY', 'synthetic-ui-key')).ok, true);
+  const result = await store.discover('sample', 'work', { apiKeyEnv: 'WORK_KEY', api: 'openai-responses', baseURL: 'https://selected.example/v1' });
+  assert.equal(result.ok, true);
+  assert.equal(result.models[0].id, 'selected-model');
+  const inputs = app.calls.filter(call => call.init?.method === 'POST').map(call => JSON.parse(call.init.body));
+  assert.deepEqual(inputs[0], { action: 'credential', ref: 'WORK_KEY', value: 'synthetic-ui-key' });
+  assert.equal(inputs[1].action, 'discover');
+  assert.equal(inputs[1].provider, 'sample');
+  assert.equal(inputs[1].entryId, 'work');
+  assert.doesNotMatch(JSON.stringify(inputs[1]), /synthetic-ui-key/);
+  assert.doesNotMatch(JSON.stringify(store.getSnapshot()), /synthetic-ui-key/);
+  app.dispose();
+});
+
+test('memoized client exports can be applied again after complete lifecycle cleanup', async () => {
+  const app = mount(); await settle();
+  app.dispose();
+  const secondDispose = app.plugin.apply(app.ctx);
+  assert.equal(app.document.head.children.length, 2);
+  assert.equal(app.listeners.get('storage').size, 1);
+  assert.ok(app.native.subscriberCount > 0);
+  secondDispose();
+  assert.equal(app.document.head.children.length, 0);
+  assert.equal(app.listeners.get('storage').size, 0);
+  assert.equal(app.native.subscriberCount, 0);
+  assert.equal(app.own.subscriberCount, 0);
+  await settle();
+});
+
+test('a failed slot registration removes newly created bridge subscriptions and styles', async () => {
+  const app = mount(); await settle(); app.dispose();
+  app.ctx.slots.register = () => { throw new Error('slot registration failed'); };
+  assert.throws(() => app.plugin.apply(app.ctx), /slot registration failed/);
+  assert.equal(app.native.subscriberCount, 0);
+  assert.equal(app.own.subscriberCount, 0);
+  assert.equal(app.listeners.get('storage').size, 0);
+  assert.equal(app.document.head.children.length, 0);
+});
+
+test('subagent picker selection stays unavailable without changing the original model-directory behavior', async () => {
+  const app = mount();
+  const props = app.picker.inject('child');
+  assert.equal(props.available, false);
   props.load();
-  const selection = { provider: 'route-a', model: '@dsh-key/entry-a/same-id', reasoningEffort: 'high' };
-  await props.select(selection);
-  assert.equal(app.selections[0], selection, 'preserve provider, key/model alias and effort exactly');
-  assert.equal(app.loads.length, 1);
-  dispose();
-  assert.deepEqual(app.disposed, ['conversation.input.model']);
-  app.events.get('dispose')();
-  assert.equal(app.windowEvents.has('storage'), false);
+  assert.equal(await props.select({ provider: 'sample', model: 'alpha' }), undefined);
+  assert.equal(app.selections.length, 0);
+  assert.deepEqual(app.directoryCalls, ['child']);
+  app.dispose(); await settle();
 });
 
-test('unavailable subagents never load or change their owner’s model', async () => {
-  const app = mount(); app.plugin.apply(app.ctx); app.setAvailable(false);
-  const props = app.registrations.find(entry => entry.name === 'conversation.input.model').inject('subagent-a');
-  assert.equal(props.available, false); props.load();
-  assert.equal(await props.select({ provider: 'route-a', model: 'same-id' }), undefined);
-  assert.equal(app.selections.length, 0); assert.equal(app.loads.length, 0);
+test('disposal clears both slot entries, namespace subscriptions, styles and the exact storage handler', async () => {
+  const app = mount(); await settle();
+  const form = app.picker.inject('main').providersForm;
+  const store = app.card.inject().bridgeStore;
+  assert.ok(app.native.subscriberCount > 0);
+  assert.ok(app.own.subscriberCount > 0);
+  assert.equal(app.listeners.get('storage').size, 1);
+  assert.equal(app.document.head.children.length, 2);
+  app.dispose(); app.events.get('dispose')(); app.dispose();
+  assert.deepEqual(app.removed, ['settings.models.footer', 'settings.models.provider-editor', 'conversation.input.model']);
+  assert.equal(app.native.subscriberCount, 0);
+  assert.equal(app.own.subscriberCount, 0);
+  assert.equal(app.listeners.get('storage').size, 0);
+  assert.equal(app.document.head.children.length, 0);
+  assert.equal(form.getSnapshot().value.providers.sample.multiKey, undefined);
+  const count = app.calls.length;
+  await store.refresh();
+  app.native.set(nativeSnapshot()); app.own.set({ status: 'ready', value: {} });
+  await settle(); assert.equal(app.calls.length, count);
 });
 
-test('missing optional forms still leave a model seat available', () => {
-  const app = mount(); delete app.ctx.configForms;
-  app.plugin.apply(app.ctx);
-  assert.equal(app.registrations.length, 2);
-  assert.equal(app.registrations.find(entry => entry.name === 'conversation.input.model').inject('session-a').providersForm, undefined);
+test('a GET started before save cannot replace the committed bridge revision', async () => {
+  let finish;
+  const app = mount({ request: (_url, init) => {
+    if (init?.method === 'POST') {
+      const current = bridgeSnapshot(); current.revision = 6; current.providers = {};
+      return response(current);
+    }
+    return new Promise(resolve => { finish = resolve; });
+  } });
+  await settle();
+  const store = app.card.inject().bridgeStore;
+  const form = app.picker.inject('main').providersForm;
+  assert.equal((await store.save('sample', { enabled: false, keyEntries: {} }, 5)).ok, true);
+  finish(response(bridgeSnapshot())); await settle();
+  assert.equal(store.getSnapshot().revision, 6);
+  assert.equal(form.getSnapshot().value.providers.sample.multiKey, undefined);
+  app.dispose();
+});
+
+test('a response arriving after disposal cannot reactivate a held provider form', async () => {
+  let finish;
+  const app = mount({ request: () => new Promise(resolve => { finish = resolve; }) });
+  await settle();
+  const store = app.card.inject().bridgeStore;
+  const form = app.picker.inject('main').providersForm;
+  const before = store.getSnapshot();
+  app.dispose();
+  finish(response(bridgeSnapshot())); await settle();
+  assert.equal(store.getSnapshot(), before);
+  assert.equal(form.getSnapshot().value.providers.sample.multiKey, undefined);
+  assert.equal(app.document.head.children.length, 0);
+  assert.equal(app.calls.length, 1);
+});
+
+for (const status of [403, 500]) test(`bridge HTTP ${status} disables the original card and cannot invent a projection`, async () => {
+  const app = mount({ request: () => response(null, status) }); await settle();
+  const snapshot = app.card.inject().bridgeStore.getSnapshot();
+  assert.equal(snapshot.status, status === 403 ? 'forbidden' : 'error');
+  assert.equal(snapshot.writable, false);
+  assert.equal(app.picker.inject('main').providersForm.getSnapshot().value.providers.sample.multiKey, undefined);
+  assert.equal(app.calls.length, 1, 'there is no retired status polling loop');
+  app.dispose();
+});
+
+test('missing optional ConfigForms still leaves the grouped picker mounted', async () => {
+  const app = mount({ missingForms: true }); await settle();
+  assert.equal(app.registrations.length, 3);
+  assert.equal(app.picker.inject('main').available, true);
+  assert.equal(app.card.inject().bridgeStore.getSnapshot().status, 'ready');
+  app.dispose();
+});
+
+
+test('a host without the optional editor keeps grouping and never mounts an independent editable card', async () => {
+  const app = mount({ editorAvailable: false }); await settle();
+  assert.deepEqual(app.registrations.map(entry => entry.name), ['settings.models.footer', 'conversation.input.model']);
+  assert.equal(app.registrations.some(entry => entry.name === 'settings.models.provider-card'), false, 'other plugins keep their keyed provider-card cells');
+  const injected = app.picker.inject('main');
+  assert.equal(injected.providersForm.getSnapshot().value.providers.sample.multiKey, true);
+  const frame = { cells: [] };
+  const status = app.hooks.render(frame, app.card.component, {});
+  assert.equal(status.type, 'p'); assert.equal(status.props['data-bridge-editor-unavailable'], true);
+  assert.match(String(status.props.children), /统一编辑接口/);
+  assert.doesNotMatch(String(status.props.children), /保存|取消|共用配置/);
+  app.dispose();
+});
+
+test('a host with the optional editor has no duplicate provider-card form or compatibility footer', async () => {
+  const app = mount(); await settle();
+  const editor = app.registrations.find(entry => entry.name === 'settings.models.provider-editor');
+  assert.equal(editor.key, 'llm-pi-ai');
+  assert.equal(editor.inject().bridgeStore, app.card.inject().bridgeStore);
+  assert.equal(app.registrations.some(entry => entry.name === 'settings.models.provider-card'), false);
+  const status = app.hooks.render({ cells: [] }, app.card.component, {});
+  assert.equal(status, null); app.dispose();
 });

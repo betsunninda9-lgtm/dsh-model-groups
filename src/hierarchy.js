@@ -18,6 +18,17 @@ export function decodeKeyModelId(model) {
   } catch { return undefined; }
 }
 
+// A managed directory can contain native catalog fallbacks while its projected
+// root is empty. Only aliases owned by the current routing snapshot are usable.
+export function isAllowedBridgeModel(profile, modelId) {
+  if (profile?.bridgeRouting !== true) return true;
+  const alias = decodeKeyModelId(modelId);
+  const entries = profile.keyEntries;
+  if (!alias || !entries || !Object.hasOwn(entries, alias.entryId)) return false;
+  const models = entries[alias.entryId]?.models;
+  return Array.isArray(models) && models.some(model => model?.id === alias.modelId);
+}
+
 /** Explicit ranks survive host equality checks, schema parsing, and reloads.
  * Unranked legacy/new entries retain their existing relative order at the end.
  */
@@ -46,18 +57,19 @@ export function keyEntryName(providers, provider, entryId) {
 export function buildModelHierarchy(groups, providers, preferences, current = null) {
   return groups.map(group => {
     const profile = Object.hasOwn(providers ?? {}, group.id) ? providers[group.id] : undefined;
-    const aliases = group.models.filter(model => decodeKeyModelId(model.id));
+    const models = profile?.bridgeRouting === true ? group.models.filter(model => isAllowedBridgeModel(profile, model.id)) : group.models;
+    const aliases = models.filter(model => decodeKeyModelId(model.id));
     const multi = profile?.multiKey === true || (providers === undefined && aliases.length > 0);
     const root = {
       kind: multi ? 'multi' : 'provider', key: group.id, id: group.id,
-      name: group.provider?.name ?? group.name ?? group.id, group,
+      name: group.provider?.name ?? group.name ?? group.id, group: models === group.models ? group : { ...group, models },
       current: current?.provider === group.id,
       expanded: isGroupExpanded(preferences, group.id, current?.provider),
     };
     if (!multi) {
       // A catalog refresh can race with disabling multi-key. Do not offer stale
       // aliases as if they belonged to the single-key credential.
-      return { ...root, group: { ...group, models: group.models.filter(model => !model.id.startsWith(KEY_MODEL_PREFIX)) }, modelCount: group.models.filter(model => !model.id.startsWith(KEY_MODEL_PREFIX)).length };
+      return { ...root, group: { ...group, models: models.filter(model => !model.id.startsWith(KEY_MODEL_PREFIX)) }, modelCount: models.filter(model => !model.id.startsWith(KEY_MODEL_PREFIX)).length };
     }
     const byEntry = new Map();
     const configured = profile?.keyEntries && typeof profile.keyEntries === 'object' ? profile.keyEntries : {};
@@ -91,7 +103,7 @@ export function buildModelHierarchy(groups, providers, preferences, current = nu
     });
     // Legacy raw selections keep their exact original credential. Offer only the
     // current raw model here, not an extra editable/key-group configuration.
-    if (root.current && !selectedEntry) {
+    if (profile?.bridgeRouting !== true && root.current && !selectedEntry) {
       const legacy = group.models.filter(model => model.id === current.model && !model.id.startsWith(KEY_MODEL_PREFIX));
       if (legacy.length) {
         const key = keyEntryGroupKey(group.id, '@legacy');

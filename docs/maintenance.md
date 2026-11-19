@@ -2,6 +2,107 @@
 
 日常安装和使用见 [README](../README.md)。
 
+## 0.4.0-alpha.13：可选统一编辑接口
+
+正常客户端只在可选的 `settings.models.provider-editor`、键 `llm-pi-ai` 注册完整编辑器。接口由原生模型页声明并拥有；插件遵守 `open`、`readOnly` 和 `onClose(changed)`，原生页继续拥有账号、供应商卡片及页尾子插槽。生产插件不读取或修改宿主客户端源码。
+
+未提供接口时，不注册第二套 provider-card 表单，也不占用第三方供应商卡片的键位。只在 `settings.models.footer` 的独立 list 项提示限制；分组选择与执行不依赖这个编辑接口。不要把这种降级称为完整统一编辑，也不要为支持它绕过插槽所有权。
+
+`editor-state.js` 使用对象键无序、数组及密钥组顺序有序的语义比较。编辑器管理一个基线和一份草稿；共享名称／连接字段与原单密钥字段只提交真正变化的部分。取消重建基线，折叠保留草稿但关闭发现／移除弹窗；异步发现必须拒绝折叠后到达的旧结果。保存完成时只有仍展开的原编辑器可以调用父级关闭函数，避免关闭已经切换的其他供应商。
+
+`shared.js` 允许 `displayName/api/baseURL/headers`；`single-key.js` 只允许根凭据引用和标准模型字段。按模型 ID 合并未显示的宿主选项，删除用户明确清空的可见字段。原生和插件配置均校验 revision，检查在 journal 和任何配置写入前进行。仅改显示名称不改变路由 token；执行能力或连接变化仍使旧 token 失效。
+
+完整页面隔离验收：
+
+```bash
+DSH_EDITOR_CAPABILITY=1 node test/browser/optional-provider-editor.mjs
+DSH_EDITOR_CAPABILITY=0 node test/browser/optional-provider-editor.mjs
+```
+
+脚本使用原生 Loaded 页面、公开 SlotCore 与真实浏览器；有接口时使用明确标记的宿主内存副本，无接口时使用未修改的原生来源。必须保留第三方卡片／页尾与账号入口，检查统一保存、取消、整组折叠、只读、卸载回退和 390/860 宽度。生成的截图是测试数据，不是已认证本机页面的验收。
+
+接口最小改动只作为可审阅的独立宿主提案与本机试用；安装插件不会自动应用提案，其他移植版无须接受源码补丁才能继续分组和执行。实际试用须保全原文件，并通过宿主正常模块生命周期发布更新后的客户端资源，再刷新现有 GUI；不启动替代服务器，不擅自重启引擎。
+
+## 0.4.0-alpha.12：按 bundle 基准锚定文件
+
+安装行写包内 `./lib/bridge-host-<version>.js`，公共 `parsePatchList` 会以 bundle 补丁文件为基准锚定为 file URL。不能按 profile 再拼 `node_modules`，也不能用 YAML.parse 后手工拼装的行冒充实际安装解析。回归依次执行真实补丁解析、后端导入、ClientModuleRegistry 注册和实际脚本响应。
+
+## 0.4.0-alpha.11：版本化文件入口与前端发现
+
+安装行使用 `./node_modules/dsh-model-groups/lib/bridge-host-<version>.js`，相对 Include 的 profile 基准解析，不含设备绝对路径。ClientModuleRegistry 支持文件入口，会从文件所属 package.json 读取前端声明；唯一版本文件同时避免包根解析缓存继续导入旧后端。真实注册器测试须使用该实际安装行，验证后端导出、启动图、脚本响应及模块 ID 一致。
+
+## 0.4.0-alpha.10：入口改名后的配置重新接入
+
+profile override 的 `name` 是断言；安装行改名后，旧配置可能仍能从可信 Settings 的 `user` 读到，却不在实际 `value` 中。不能把磁盘记录数量当作运行时已启用，也不能直接把 `user` 当作已经提交的配置。
+
+恢复器只处理实际值中缺失的自身记录：验证草稿，并要求当前原生配置完全等于已保存投影（中断日志须符合 before/after），随后经公共 Settings 的 CAS 写入当前入口。不同投影停止，不覆盖外部编辑；恢复冲突不再标记初始化成功。HMR 独占期间受阻时，仍由已认证的原模型页请求重试。
+
+## 0.4.0-alpha.9：前后端共同注册
+
+alpha.9 曾将安装行恢复为包根 `dsh-model-groups`；alpha.11 改为同样可发现、且不复用包根解析缓存的文件入口。当前宿主 ClientModuleRegistry 只识别包根或文件路径，`dsh-model-groups/bridge/<version>` 等子路径可以启动服务端，却不会发布浏览器模块，表现为原模型页多密钥和聊天分组同时消失。
+
+包根的 `exports["."]` 指向按版本构建的完整后端文件，`exports["./client"]` 指向浏览器文件；后端热加载隔离通过文件名实现，不通过安装行子路径实现。回归必须把实际安装行交给真实 ClientModuleRegistry，确认启动图包含插件并能提供与模块 ID 一致的脚本，不能只直接执行客户端 factory。已有显式迁移交接的私密结果可记录 `clientRegistered` 布尔值，用于区分配置激活与前端注册。
+
+## 0.4.0-alpha.8：热加载事务后的初始化
+
+`Settings.mutate` 经过宿主 HMR 独占事务。插件在热加载回调内激活时，微任务和普通定时器会继承该异步事务上下文，延迟执行也不能证明已经离开它。不能访问宿主私有 AsyncLocalStorage 或绕过独占检查。
+
+初始化未完成时，已认证 GET 只返回 `initializationRequired`，保持只读；原模型页随后显式 POST `initialize`，从正常请求上下文重试恢复、导入和投影。POST 仍先验证 owner 身份，多个初始化请求串行合并，页面只在收到提交后的快照后展示完成结果。覆盖启动受阻后重试、访客拒绝和 GET 零写入回归。
+
+## 0.4.0-alpha.5：完整模块图热加载
+
+`scripts/build.mjs` 使用固定开发依赖 esbuild 将插件自身后端编译到按版本区分的 `lib/bridge-host-<version>.js`，公开宿主依赖保持 external。后端文件按版本区分，包根入口通过 exports 选择当前文件，避免仅替换外层入口却复用已缓存的相对导入模块。alpha.5～alpha.8 曾使用子路径安装行；该做法会被前端注册器忽略，已在 alpha.9 改回包根。源码仍在 `src/bridge/host.js`，构建检查同时验证服务端和客户端；`DSH_BRIDGE_ENTRY` 可让真实 host 回归直接执行打包后的入口。
+
+只有已有显式迁移交接时才写入私密结果文件，内容仅含固定阶段、白名单错误码与数量，不含供应商名称、路径、配置、凭据或异常文本。
+
+## 0.4.0-alpha.4：切换旧安装和共用配置
+
+初始化须等待真实 Settings 中出现自身表单，不能在 fiber 激活前读取并把失败当作完成。
+
+`shared.js` 只接受共用 api/baseURL/headers，真实根凭据与未知字段保留在 secret 原配置中；保存和临时发现使用同一草稿。对旧补丁切换，先以私密文件保全原始配置，再通过精确可逆配方撤回旧程序，最后由控制器经公共 Settings CAS 导入；不直接编辑 profile。显式交接文件绑定 Settings documentPath，不覆盖已存在的新记录，原配置发生变化时停止迁移。普通安装不会自行撤回旧源码补丁。
+
+## 0.4.0-alpha.3：原编辑器界面
+
+`legacy-models-ui.js`、`legacy-reorder.js` 与自有前缀的 CSS 静态保留原编辑器结构、模型弹窗、键盘和长按交互；生产运行不读取宿主客户端源码。公开 primitives 由客户端注入，独立渲染才使用语义 fallback。`provider-card.js` 只衔接草稿、凭据、版本检查与生命周期，避免再次设计近似界面。
+
+临时输入的密钥通过独立发现参数传递，只作用于当次模型列表请求；不写入配置、凭据、journal 或运行时缓存。只有“保存”才顺序写入有输入的凭据并提交配置，失败保留未完成输入。测试必须覆盖未完成模型行、模型搜索勾选、能力编辑、单次提交、取消、部分失败与卸载清理。
+
+可选 `test/browser/restore-ui.mjs` 使用真实浏览器分别渲染旧组件基准和当前卡片，在 390/860 宽度、明暗主题下对照表单及模型控件几何，检查弹窗确认和键盘重排，并输出测试数据截图。`DSH_OLD_MODELS_CLIENT` 指定含旧多密钥编辑器的参考客户端；`DSH_UI_TOOLS` 指向独立安装的 React、ReactDOM、esbuild、Playwright 目录。测试基准只在开发脚本中读取，不进入生产依赖。
+
+## 0.4.0-alpha.1：公共服务架构
+
+正常后端入口为 `src/bridge/host.js`，不再加载 `src/index.js` 的旧维护器。旧 `native/`、补丁生成器和精确恢复测试保留用于历史包维护，不属于新版本的正常执行路径。不要为新版本增加移植版配方或自动撤销运行中的旧补丁。
+
+客户端通过 `settings.models.provider-card`、键 `llm-pi-ai` 将编辑区放进原模型页面供应商卡片。`src/client.js` 不注册独立密钥管理页；`providers-form.js` 将已确认投影与插件配置合成只读表单，供模型选择器和备用选择器使用。原表单不能与插件草稿原子提交，使用卡片内单独的“保存”按钮，一次提交凭据与配置。
+
+服务端用公开 Settings 描述/修改接口操作插件命名空间与 `llm-pi-ai` 的供应商配置。整个内部 `bridge` 树标记为 `secret`，普通远程 Settings 描述不能读取 original/journal；可信服务端仍可直接读写并校验 revision。卡片快照只返回必要数据，过滤已知认证头和原始凭据字段；新保存（包括关闭状态）也拒绝这些明文认证字段。控制器先写带 before/after 的 journal，再按原表单 revision 更新原配置，最后提交插件记录；失败、重启或并发编辑时按可观察的前后状态恢复，第三种状态不覆盖。关闭还原原配置；若外部已经编辑则只解除管理。旧开启的 `multiKey/keyEntries` 配置迁移，关闭标记状态不自动启用。
+
+原供应商被投影为只用于公开模型目录与 `prepareCall` 的普通配置，凭据为无上游权限的固定本机占位值、端点为关闭的本机地址。实际请求在公共 `llm/stream` 中间件中交给插件隔离的官方 LLM/适配器运行时：保持公共 provider 身份，模型选择别名解析后使用真实模型 ID、所选密钥引用、端点和协议。原始请求的未知字段、描述符及取消信号尽可能保留；历史回放仅为同一公共模型/密钥重映射，原历史不变。不能将此桥接当成所有私有授权或高级语义都等价。
+
+投影模式通过真实适配器离线解析探测，依次尝试普通模型与旧多密钥模型配置，要求返回的 provider/model 身份精确一致。不是按版本标签、schema 接受未知字段或源码文本猜测能力。无需本地 HTTP 转换代理，不调用收费接口做探测。
+
+`routing.js` 对实际执行配置与解析后的模型能力生成 SHA-256 标识，内部 token 只包含摘要；凭据值不参与摘要，凭据引用参与。根模型与每组模型均使用配置绑定别名。`dispatch.js` 拒绝已失效 token 和受管理的旧裸模型 ID，不把准备于配置 A 的调用交给配置 B；原单密钥通过版本化兼容组重新选择。没有公共 prepare 委托钩子时，这是明确代价。凭据服务自身替换同一引用值遵循宿主的通常凭据语义。
+
+已知契约边界：原生模型配置无法完整投影 `toolUpdate` / `systemPromptUpdate` 等扩展；dsh-go Recall 的私有 WeakMap 授权来源不随描述符复制，内层准备会拒绝受保护辅助调用。测试应验证该请求在凭据/网络前被拒绝，不调用私有继承接口绕过授权。
+
+新架构验证：
+
+```bash
+npm ci --ignore-scripts
+npm run build
+DSH_ROOT=/path/to/current/dsh DSH_PORT_ROOT=/path/to/pristine/public/dsh npm test
+npm run check:build
+npm pack --dry-run
+```
+
+`test/bridge-host.test.mjs` 使用真实 LLM、官方适配器和内存公共 Settings CAS，本地模拟 OpenAI/Anthropic 流式端点验证端到端链路，并比较五个宿主程序哈希未变。目录与传输分别验证；原版及旧补丁适配器都覆盖，不能用旧补丁后的适配器冒充原版能力证明。当前 UI 单元测试不代表已在所有移植版实际网页人工验收。
+
+模块通过宿主公开 Loader 导入，复核应使用真实 profile 的 `baseUrl` 与启动流程中的公共包解析服务（`PluginPackages` / runtime resolution）。只构造裸 Loader 不等于完整启动环境：profile 中通常不直接安装核心包。离线加载回归须覆盖真实 profile 作用域、公共包解析和默认加载路径，不靠写死宿主安装目录或覆盖 `loadModule` 掩盖解析差异。所用 profile 只读，加载和探测不得写入实际配置或发出模型请求。
+
+直接卸载会保留本机目录投影并使请求失败，因此先在原卡片关闭并保存，再切回普通模型，最后卸载。新入口不重启引擎、不改加载器 composition，也不自动卸载历史程序补丁。
+
+以下各节为 0.3.x 历史补丁方案，只有维护旧安装时使用。
+
 ## 0.3.12-beta.4：组合宿主重叠改动
 
 DeepCode `kelai141/dsh-mobile-apk` 的 `v0.14.11` 运行包与反馈中的五项程序哈希逐一相同。两个冲突来自语义可组合的上下文变化：模型发现为内置目录增加显式端点限制；设置组件将初始模型改为空行，并在保存时过滤空 ID。旧文本配方把这些宿主内容一起包含在改动锚点中，导致无法匹配。

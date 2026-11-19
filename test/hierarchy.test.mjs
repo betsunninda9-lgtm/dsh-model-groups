@@ -232,3 +232,30 @@ test('malformed reserved aliases and unsafe config entries are not offered as ra
   assert.equal(keyEntryName({ provider: { keyEntries: inherited } }, 'provider', 'inherited'), 'inherited');
   assert.equal(keyEntryName({ provider: { keyEntries: inherited } }, 'provider', 'own'), 'own');
 });
+
+test('managed routing offers only current canonical aliases, including a versioned root, without reviving a raw current selection', () => {
+  const currentKey = alias('g_current', 'wire'), root = alias('g_root', 'old-root');
+  const catalog = [{ id: 'managed', name: 'Managed', models: [
+    { id: currentKey }, { id: root }, { id: alias('g_stale', 'wire') },
+    { id: alias('g_current', 'removed-model') }, { id: '@dsh-key/%67_current/wire' },
+    { id: 'old-root' }, { id: 'unexpected-native-catalog-model' },
+  ] }, { id: 'ordinary', models: [{ id: 'ordinary-model' }] }];
+  const config = { managed: { multiKey: true, bridgeRouting: true, keyEntries: {
+    g_current: { name: 'Current key', models: [{ id: 'wire' }] },
+    g_root: { name: 'Original root', models: [{ id: 'old-root' }] },
+  } } };
+  for (const selected of ['old-root', alias('g_stale', 'wire'), '@dsh-key/%67_current/wire']) {
+    const current = { provider: 'managed', model: selected };
+    const before = structuredClone({ catalog, config, current });
+    const tree = buildModelHierarchy(catalog, config, { managed: true, '@key/managed/g_current': true, '@key/managed/g_root': true, ordinary: true }, current);
+    assert.deepEqual(tree[0].children.map(child => child.models.map(model => model.id)), [[currentKey], [root]]);
+    assert.equal(tree[0].children.some(child => child.legacy || child.current), false);
+    assert.deepEqual(tree[0].group.models.map(model => model.id), [currentKey, root]);
+    assert.deepEqual(visibleHierarchyModels(tree), [{ provider: 'managed', model: currentKey }, { provider: 'managed', model: root }, { provider: 'ordinary', model: 'ordinary-model' }]);
+    assert.deepEqual({ catalog, config, current }, before, 'filtering never changes the held current selection or input snapshots');
+  }
+  const empty = buildModelHierarchy(catalog, { managed: { multiKey: true, bridgeRouting: true, keyEntries: {} } }, { managed: true }, { provider: 'managed', model: 'old-root' });
+  assert.deepEqual(empty[0].children, []);
+  assert.equal(empty[0].modelCount, 0);
+  assert.deepEqual(empty[0].group.models, []);
+});

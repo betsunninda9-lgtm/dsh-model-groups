@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-groups",
-  "version": "0.3.12-beta.4",
-  "description": "在 DSH 网页端按供应商和密钥配置选择模型，并为不同密钥设置独立模型和协议；多密钥按宿主实际代码判断兼容，不锁定单一 DSH 版本。",
+  "version": "0.4.0-alpha.14",
+  "description": "在 DSH 原模型设置的供应商卡片内管理独立密钥、协议和模型；通过公开扩展接口分流，不改写宿主程序。",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -23,10 +23,12 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "main": "./src/index.js",
+  "main": "./lib/bridge-host-0.4.0-alpha.14.js",
   "exports": {
-    ".": "./src/index.js",
+    ".": "./lib/bridge-host-0.4.0-alpha.14.js",
     "./client": "./lib/client.js",
+    "./bridge": "./lib/bridge-host-0.4.0-alpha.14.js",
+    "./bridge/*": "./lib/bridge-host-*.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -40,6 +42,8 @@
     "README.md",
     "CHANGELOG.md",
     "docs/maintenance.md",
+    "docs/provider-editor-interface-proposal.md",
+    "docs/unified-models-feasibility.md",
     "docs/capabilities-beta.md",
     "docs/images/*.webp",
     "LICENSE"
@@ -76,7 +80,11 @@
     "doctor": "node scripts/doctor.mjs",
     "prepack": "npm run build && npm run check:build"
   },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
   "dependencies": {
+    "@deepseek-ai/schemastery": "~3.19.0",
     "acorn": "^8.15.0"
   }
 }

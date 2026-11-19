@@ -12,6 +12,7 @@ function FallbackModelSelect({ available, directory, select, t, providersForm })
 		const profile = Object.hasOwn(providers ?? {}, group.id) ? providers[group.id] : undefined;
 		const multi = profile?.multiKey === true || (providers === undefined && group.models.some(model => decodeKeyModelId(model.id)));
 		return group.models.flatMap(model => {
+			if (!isAllowedBridgeModel(profile, model.id)) return [];
 			const key = decodeKeyModelId(model.id);
 			if (key) {
 				if (!multi || (providers !== undefined && !Object.hasOwn(profile?.keyEntries ?? {}, key.entryId))) return [];
