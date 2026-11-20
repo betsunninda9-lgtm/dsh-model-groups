@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-groups",
-  "version": "0.4.0-alpha.14",
-  "description": "在 DSH 原模型设置的供应商卡片内管理独立密钥、协议和模型；通过公开扩展接口分流，不改写宿主程序。",
+  "version": "0.4.0-alpha.15",
+  "description": "在 DSH 原模型界面管理独立密钥、协议和模型；自动接入统一编辑器，通过公开 LLM 服务分流。",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -23,11 +23,11 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "main": "./lib/bridge-host-0.4.0-alpha.14.js",
+  "main": "./lib/bridge-host-0.4.0-alpha.15.js",
   "exports": {
-    ".": "./lib/bridge-host-0.4.0-alpha.14.js",
+    ".": "./lib/bridge-host-0.4.0-alpha.15.js",
     "./client": "./lib/client.js",
-    "./bridge": "./lib/bridge-host-0.4.0-alpha.14.js",
+    "./bridge": "./lib/bridge-host-0.4.0-alpha.15.js",
     "./bridge/*": "./lib/bridge-host-*.js",
     "./package.json": "./package.json"
   },

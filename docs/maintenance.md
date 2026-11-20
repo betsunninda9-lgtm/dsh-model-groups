@@ -2,6 +2,27 @@
 
 日常安装和使用见 [README](../README.md)。
 
+## 0.4.0-alpha.15：首次安装自动接入编辑器
+
+alpha.14 只发布了接口消费者，漏掉其他设备的接口安装，首次安装无法配置多密钥。当前激活由 `src/bridge/editor-interface.js` 自动完成接入：通过公开 `clientModules.clientPath()` 定位实际模型页，校验包身份和 `./client` 导出；`editor-interface-transform.js` 以 Acorn 找到原模型页的编辑分支与子插槽声明，只按源位置拼接最小接口。普通编辑与首次设置保留各自原生回退、展开状态、只读和关闭回调；账号、provider-card 与 footer 不转移所有权。不使用整文件哈希／版本白名单来判定结构兼容。
+
+原文件及前后 SHA-256 记录保存在 DSH_HOME 的 `dsh-model-groups/editor-interface/<目标路径摘要>/` 下，目录0700、备份0600。写入使用独占锁、源内容变化检查和同目录原子替换；发布调用公开 `clientModules.rebuilt()`，使资源图和实际脚本都更新。发布失败仅在当前文件仍等于本次输出时还原，不覆盖后来写入。接入成功后再次激活不叠加；原生模块后续更新时，公开图事件触发复查。插件停用不自动撤回接口，因为原接口本身保留原生编辑器回退。
+
+GET 继续只读，接口接入发生在激活、资源图变化或已认证 POST initialize。自动接入失败不阻断已确认配置的执行，也不伪装成功；快照 `editorInterface` 只包含固定 state/code/changed，无路径、源代码或异常文本。首次安装没有分组也显示页尾状态。文件只读、包身份不符、目标结构缺失或歧义时原样保留，并返回错误码；不要扩大成任意代码重构兼容承诺。
+
+验证需从没有接口的实际模块开始：
+
+```bash
+DSH_ROOT=/path/to/dsh DSH_MODELS_CLIENT=/path/to/pristine/models/client.js \
+  node --test test/editor-interface-install.test.mjs test/editor-interface-startup.test.mjs
+DSH_ROOT=/path/to/dsh DSH_MODELS_CLIENT=/path/to/pristine/models/client.js \
+  DSH_EDITOR_AUTO_INSTALL=1 node test/browser/optional-provider-editor.mjs
+```
+
+安装回归使用真实 ClientModuleRegistry 先物化原资源，再运行生产安装器，验证新 rev 的实际响应含接口；启动回归从空插件数据开始，走真实 setupBridgeHost 后 owner 保存第一个分组。浏览器读取安装器发布的完整页面，不手动调用原型来冒充安装完成。当前验证包含原宿主与公开 DeepCode 移植版的未修改模块；测试只修改独立临时副本。
+
+下面各节记录历史版本的实现与限制，alpha.15 自动接入行为以本节为准。
+
 ## 0.4.0-alpha.13：可选统一编辑接口
 
 正常客户端只在可选的 `settings.models.provider-editor`、键 `llm-pi-ai` 注册完整编辑器。接口由原生模型页声明并拥有；插件遵守 `open`、`readOnly` 和 `onClose(changed)`，原生页继续拥有账号、供应商卡片及页尾子插槽。生产插件不读取或修改宿主客户端源码。

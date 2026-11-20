@@ -4,6 +4,9 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { proposeProviderEditorSeam } from '../prototypes/provider-editor-seam.mjs';
+import os from 'node:os';
+import { pathToFileURL } from 'node:url';
+import { ensureEditorInterface, MODELS_CLIENT_ID } from '../../src/bridge/editor-interface.js';
 
 // Full native Models-page composition probe with fixture Settings/credentials
 // and a real published SlotCore. It does not launch or contact the running GUI.
@@ -18,7 +21,28 @@ const output = process.env.DSH_UI_OUTPUT ?? '/sdcard/Download/DSH-Go';
 const before = fs.readFileSync(hostClient, 'utf8');
 const capable = process.env.DSH_EDITOR_CAPABILITY !== '0';
 const theme = process.env.DSH_UI_THEME === 'dark' ? 'dark' : 'light';
-const proposed = capable ? proposeProviderEditorSeam(before) : before;
+const automatic = process.env.DSH_EDITOR_AUTO_INSTALL === '1';
+let proposed;
+if (automatic) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'groups-editor-browser-'));
+  try {
+    fs.mkdirSync(path.join(directory, 'lib'));
+    fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ name: MODELS_CLIENT_ID, type: 'module', version: '0.2.2-rc.1', exports: { '.': './lib/index.js', './client': './lib/client.js' }, dsh: { client: { platform: 'web' } } }));
+    const client = path.join(directory, 'lib/client.js'); fs.writeFileSync(client, before); fs.writeFileSync(path.join(directory, 'lib/index.js'), 'export function apply() {}');
+    const hostRequire = createRequire(path.join(process.env.DSH_ROOT ?? '/opt/dsh', 'package.json'));
+    const { Context } = await import(pathToFileURL(hostRequire.resolve('@deepseek-ai/cordis')).href);
+    const { ClientModuleRegistry } = await import(pathToFileURL(hostRequire.resolve('@deepseek-ai/dsh-client-modules')).href);
+    const ctx = new Context().extend({ baseUrl: pathToFileURL(path.join(directory, 'package.json')).href });
+    ctx.provide('loader', { entries: () => [{ options: { name: pathToFileURL(path.join(directory, 'lib/index.js')).href }, fiber: {}, disabled: false, parent: { tree: { ctx } } }] });
+    const registry = new ClientModuleRegistry(ctx);
+    const result = ensureEditorInterface(registry, { home: path.join(directory, 'home') }); assert.equal(result.state, 'ready'); assert.equal(result.changed, true);
+    const row = registry.graph().entries.find(row => row.id === MODELS_CLIENT_ID);
+    const response = await registry.fetchBundle(new Request(new URL(row.url, 'http://127.0.0.1'))); assert.equal(response.status, 200);
+    proposed = await response.text(); assert.match(proposed, /dsh-model-groups\/editor-interface@1/);
+  } finally {
+    assert.equal(fs.realpathSync(directory), directory); assert.ok(path.basename(directory).startsWith('groups-editor-browser-')); fs.rmSync(directory, { recursive: true });
+  }
+} else proposed = capable ? proposeProviderEditorSeam(before) : before;
 const reference = proposed.replace('return module.exports;', 'return { Loaded, zh };');
 assert.notEqual(reference, proposed);
 const entry = `

@@ -11,6 +11,7 @@ import { applyBridgeShared } from './shared.js';
 import { applyBridgeSingleKey } from './single-key.js';
 import { readBridgeImport } from './import.js';
 import { reportBridgeImport } from './migration-report.js';
+import { createEditorInterfaceManager } from './editor-interface.js';
 
 export { Config } from './config.js';
 
@@ -62,12 +63,14 @@ export function setupBridgeHost(ctx, { namespace = 'model-groups', runtime = cre
   });
   let initialized = false, initializing;
   async function initialize() {
+    editorInterface.ensure();
     if (initialized) return true;
     if (initializing) return initializing;
     initializing = runInitialization().finally(() => { initializing = undefined; });
     return initializing;
   }
-  const api = { ...controller, needsInitialization: () => !initialized, async initialize() {
+  const editorInterface = createEditorInterfaceManager(ctx);
+  const api = { ...controller, async snapshot() { return { ...await controller.snapshot(), editorInterface: editorInterface.snapshot() }; }, needsInitialization: () => !initialized, async initialize() {
     await initialize();
     if (!initialized) throw Object.assign(new Error('MIGRATION_NOT_READY'), { code: 'MIGRATION_NOT_READY' });
   } };

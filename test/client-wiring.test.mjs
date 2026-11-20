@@ -278,7 +278,7 @@ test('a host without the optional editor keeps grouping and never mounts an inde
   const frame = { cells: [] };
   const status = app.hooks.render(frame, app.card.component, {});
   assert.equal(status.type, 'p'); assert.equal(status.props['data-bridge-editor-unavailable'], true);
-  assert.match(String(status.props.children), /统一编辑接口/);
+  assert.match(String(status.props.children), /自动接入原模型页面/);
   assert.doesNotMatch(String(status.props.children), /保存|取消|共用配置/);
   app.dispose();
 });
