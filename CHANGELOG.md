@@ -2,6 +2,11 @@
 
 完整版本列表与安装包：[GitHub Releases](https://github.com/betsunninda9-lgtm/dsh-model-groups/releases)。
 
+## 0.4.0 · 2026-11-23
+
+- 基于 0.3.12-beta.4 代码发布为 0.4.0 正式版；保留五处宿主补丁，不含 test/0.4.0-alpha.13–15 的统一供应商编辑器等改动。
+- native-patches：结构补丁语法检查改用 acorn 解析。
+
 ## 0.3.12-beta.4 · 2026-11-19 · 移植版重叠代码兼容
 
 - 用 DeepCode v0.14.11 公开运行包复现与反馈完全相同的五个程序文件；修复模型发现和设置页的两个代码重叠点，不添加哈希白名单。

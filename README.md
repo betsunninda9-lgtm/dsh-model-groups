@@ -4,12 +4,12 @@
 
 需要 **Node.js 22 或更新版本**。多密钥维护按宿主实际代码判断兼容，不再把 DSH 版本号作为安装或执行门槛；`0.2.2-rc.1` 是历史补丁基准，不是唯一允许的版本。本插件适用于 DSH 网页端，不替换原生 App 的模型菜单。
 
-## 0.3.12-beta.4 · 保留移植版的模型发现与表单改动
+## 0.4.0 · 基于 0.3.12-beta.4，保留移植版的模型发现与表单改动
 
 本次测试版修复 DeepCode `v0.14.11` 的两个真实代码重叠点，并继续按实际代码判断跨版本兼容。安装测试版：
 
 ```bash
-dsh plugin --profile web add https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.3.12-beta.4/dsh-model-groups-0.3.12-beta.4.tgz
+dsh plugin --profile web add https://github.com/betsunninda9-lgtm/dsh-model-groups/releases/download/v0.4.0/dsh-model-groups-0.4.0.tgz
 ```
 
 - 模型发现保留宿主的端点优先条件，并与所选密钥的协议条件组合；端点失败不回退到内置目录。

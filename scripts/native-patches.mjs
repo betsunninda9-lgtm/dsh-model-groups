@@ -6,7 +6,7 @@ import { compatibilitySnapshot } from '../src/compatibility.js';
 import { structuralRevision, diagnoseStructuralRevision } from './structural-patches.mjs';
 import { discoveryRecipes } from './discovery-recipes.mjs';
 import { settingsRecipes, SettingsRecipeAmbiguity } from './settings-recipes.mjs';
-import { spawnSync } from 'node:child_process';
+import { parse as parseModule } from 'acorn';
 
 export const ARTIFACTS = ['pi-ai.patch.json', 'settings-models.patch.json', 'llm-typert.host.patch.json', 'llm-typert.remote-client.patch.json', 'api-remotes.patch.json'];
 const pluginRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -70,10 +70,15 @@ function compatibleRevision(source, candidates, knownOriginal = false) {
   catch (error) { throw matchingFailure(error, source, prepared, knownOriginal); }
   if (!revision) throw matchingFailure(new Error(`Refusing unrecognized content: ${candidates[0].target}`), source, prepared, knownOriginal);
   for (const content of new Set([revision.original, revision.latest])) {
-    const check = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: content, encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024 });
-    if (check.status !== 0) {
-      const error = new Error('Structural patch syntax check failed');
-      structuralFailures.set(error, [{ recipeIndex: null, replacementIndex: null, phase: 'syntax', code: 'SYNTAX_CHECK_FAILED', candidateCount: null }]);
+    // Parse in-process instead of spawning `node --check`: process.execPath is not
+    // always a node binary (e.g. Android linker64, Electron), so a child process
+    // could fail for reasons unrelated to the patched source.
+    try {
+      parseModule(content, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
+    } catch (cause) {
+      const isSyntax = cause instanceof SyntaxError;
+      const error = new Error(isSyntax ? `Structural patch syntax check failed: ${cause.message}` : `Structural patch syntax checker unavailable: ${cause?.message ?? cause}`);
+      structuralFailures.set(error, [{ recipeIndex: null, replacementIndex: null, phase: 'syntax', code: isSyntax ? 'SYNTAX_CHECK_FAILED' : 'SYNTAX_CHECKER_UNAVAILABLE', candidateCount: null }]);
       throw error;
     }
   }
